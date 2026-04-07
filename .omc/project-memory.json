@@ -1,0 +1,235 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1775554177771,
+  "projectRoot": "/Users/yanjie/data/code/local/network_test",
+  "techStack": {
+    "languages": [
+      {
+        "name": "Go",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "go.mod"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": "go",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "example": {
+      "path": "example",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1775554177741,
+      "keyFiles": [
+        "basic-server.go"
+      ]
+    },
+    "internal": {
+      "path": "internal",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1775554177744,
+      "keyFiles": []
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "internal/resp/writer.go",
+      "accessCount": 10,
+      "lastAccessed": 1775556398503,
+      "type": "file"
+    },
+    {
+      "path": "internal/conn/conn.go",
+      "accessCount": 8,
+      "lastAccessed": 1775556726105,
+      "type": "file"
+    },
+    {
+      "path": "",
+      "accessCount": 8,
+      "lastAccessed": 1775556749538,
+      "type": "directory"
+    },
+    {
+      "path": "internal/conn/manager.go",
+      "accessCount": 6,
+      "lastAccessed": 1775556464139,
+      "type": "file"
+    },
+    {
+      "path": "netgo.go",
+      "accessCount": 6,
+      "lastAccessed": 1775556715801,
+      "type": "file"
+    },
+    {
+      "path": "internal/conn/pool_test.go",
+      "accessCount": 6,
+      "lastAccessed": 1775556767034,
+      "type": "file"
+    },
+    {
+      "path": "mux_test.go",
+      "accessCount": 5,
+      "lastAccessed": 1775556146378,
+      "type": "file"
+    },
+    {
+      "path": "example/basic-server.go",
+      "accessCount": 5,
+      "lastAccessed": 1775556715877,
+      "type": "file"
+    },
+    {
+      "path": "server_test.go",
+      "accessCount": 5,
+      "lastAccessed": 1775556726154,
+      "type": "file"
+    },
+    {
+      "path": "pubsub_test.go",
+      "accessCount": 5,
+      "lastAccessed": 1775556749516,
+      "type": "file"
+    },
+    {
+      "path": "example/basic_server_test.go",
+      "accessCount": 5,
+      "lastAccessed": 1775557371346,
+      "type": "file"
+    },
+    {
+      "path": "netgo_additional_test.go",
+      "accessCount": 5,
+      "lastAccessed": 1775568204861,
+      "type": "file"
+    },
+    {
+      "path": "internal/conn/conn_additional_test.go",
+      "accessCount": 5,
+      "lastAccessed": 1775568674218,
+      "type": "file"
+    },
+    {
+      "path": "pubsub.go",
+      "accessCount": 4,
+      "lastAccessed": 1775556767078,
+      "type": "file"
+    },
+    {
+      "path": "mux.go",
+      "accessCount": 4,
+      "lastAccessed": 1775556767145,
+      "type": "file"
+    },
+    {
+      "path": "internal/resp/parser.go",
+      "accessCount": 3,
+      "lastAccessed": 1775555923111,
+      "type": "file"
+    },
+    {
+      "path": "internal/resp/parser_writer_test.go",
+      "accessCount": 3,
+      "lastAccessed": 1775556437754,
+      "type": "file"
+    },
+    {
+      "path": "internal/conn/pool.go",
+      "accessCount": 3,
+      "lastAccessed": 1775556517462,
+      "type": "file"
+    },
+    {
+      "path": "internal/conn/manager_test.go",
+      "accessCount": 3,
+      "lastAccessed": 1775556715952,
+      "type": "file"
+    },
+    {
+      "path": "internal/resp",
+      "accessCount": 2,
+      "lastAccessed": 1775554541889,
+      "type": "directory"
+    },
+    {
+      "path": "internal/resp/writer_simple_test.go",
+      "accessCount": 2,
+      "lastAccessed": 1775555703615,
+      "type": "file"
+    },
+    {
+      "path": "internal/conn/listener.go",
+      "accessCount": 2,
+      "lastAccessed": 1775556517412,
+      "type": "file"
+    },
+    {
+      "path": "internal/conn/listener_test.go",
+      "accessCount": 2,
+      "lastAccessed": 1775556737964,
+      "type": "file"
+    },
+    {
+      "path": "internal/session/session.go",
+      "accessCount": 2,
+      "lastAccessed": 1775556936754,
+      "type": "file"
+    },
+    {
+      "path": "go.mod",
+      "accessCount": 1,
+      "lastAccessed": 1775555739183,
+      "type": "file"
+    },
+    {
+      "path": "internal/resp/types.go",
+      "accessCount": 1,
+      "lastAccessed": 1775555855059,
+      "type": "file"
+    },
+    {
+      "path": "internal/resp/PARSER.md",
+      "accessCount": 1,
+      "lastAccessed": 1775555971881,
+      "type": "file"
+    },
+    {
+      "path": "internal/session/session_test.go",
+      "accessCount": 1,
+      "lastAccessed": 1775556146673,
+      "type": "file"
+    },
+    {
+      "path": "internal/conn",
+      "accessCount": 1,
+      "lastAccessed": 1775556726171,
+      "type": "directory"
+    }
+  ],
+  "userDirectives": []
+}
