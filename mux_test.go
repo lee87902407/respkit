@@ -1,11 +1,11 @@
-package netgo
+package respkit
 
 import (
 	"net"
 	"strings"
 	"testing"
 
-	"github.com/yanjie/netgo/internal/session"
+	"github.com/lee87902407/respkit/internal/session"
 )
 
 type muxTestConn struct {

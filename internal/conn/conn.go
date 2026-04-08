@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yanjie/netgo/internal/resp"
-	"github.com/yanjie/netgo/internal/session"
+	"github.com/lee87902407/respkit/internal/resp"
+	"github.com/lee87902407/respkit/internal/session"
 )
 
 // DetachedConn is a connection managed by the caller
@@ -400,57 +400,57 @@ func (dc *detachedConn) Flush() error {
 	return dc.conn.Flush()
 }
 
-// Session returns the session (implements netgo.Conn)
+// Session returns the session (implements respkit.Conn)
 func (dc *detachedConn) Session() *session.Session {
 	return dc.conn.Session()
 }
 
-// SetData sets user data (implements netgo.Conn)
+// SetData sets user data (implements respkit.Conn)
 func (dc *detachedConn) SetData(data interface{}) {
 	dc.conn.SetData(data)
 }
 
-// WriteString writes a simple string (implements netgo.Conn)
+// WriteString writes a simple string (implements respkit.Conn)
 func (dc *detachedConn) WriteString(s string) error {
 	return dc.conn.WriteString(s)
 }
 
-// WriteBulk writes a bulk string (implements netgo.Conn)
+// WriteBulk writes a bulk string (implements respkit.Conn)
 func (dc *detachedConn) WriteBulk(b []byte) error {
 	return dc.conn.WriteBulk(b)
 }
 
-// WriteInt writes an integer (implements netgo.Conn)
+// WriteInt writes an integer (implements respkit.Conn)
 func (dc *detachedConn) WriteInt(n int64) error {
 	return dc.conn.WriteInt(n)
 }
 
-// WriteArray writes an array header (implements netgo.Conn)
+// WriteArray writes an array header (implements respkit.Conn)
 func (dc *detachedConn) WriteArray(n int) error {
 	return dc.conn.WriteArray(n)
 }
 
-// WriteNull writes a null value (implements netgo.Conn)
+// WriteNull writes a null value (implements respkit.Conn)
 func (dc *detachedConn) WriteNull() error {
 	return dc.conn.WriteNull()
 }
 
-// WriteError writes an error message (implements netgo.Conn)
+// WriteError writes an error message (implements respkit.Conn)
 func (dc *detachedConn) WriteError(msg string) error {
 	return dc.conn.WriteError(msg)
 }
 
-// WriteAny writes any value (implements netgo.Conn)
+// WriteAny writes any value (implements respkit.Conn)
 func (dc *detachedConn) WriteAny(v interface{}) error {
 	return dc.conn.WriteAny(v)
 }
 
-// Close closes the connection (implements netgo.Conn)
+// Close closes the connection (implements respkit.Conn)
 func (dc *detachedConn) Close() error {
 	return dc.conn.Close()
 }
 
-// RemoteAddr returns the remote address (implements netgo.Conn)
+// RemoteAddr returns the remote address (implements respkit.Conn)
 func (dc *detachedConn) RemoteAddr() net.Addr {
 	return dc.conn.RemoteAddr()
 }

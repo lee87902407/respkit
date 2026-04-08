@@ -1,23 +1,23 @@
-# Benchmark Report
+# 基准测试报告
 
-**Generated:** 2026-04-07  
-**Server:** netgo example server (localhost:6380)  
-**Client:** redis-benchmark  
-**Test Configuration:** 5000 requests per test, 10 parallel clients
+**生成时间：** 2026-04-07  
+**服务端：** respkit 示例服务（localhost:6380）  
+**客户端：** redis-benchmark  
+**测试配置：** 每项测试 5000 次请求，并发连接数 10
 
-## Environment
+## 测试环境
 
-- **Hardware:** macOS (Darwin 24.6.0)
-- **Go Version:** 1.25.3
-- **Server:** Single-threaded, default configuration
-- **Test Concurrency:** 10 parallel clients
+- **硬件：** macOS（Darwin 24.6.0）
+- **Go 版本：** 1.25.3
+- **服务端：** 单线程默认配置
+- **测试并发：** 10
 
-## Test Results
+## 测试结果
 
-### Basic Performance (Small Payloads - 3 bytes default)
+### 基础性能（小负载，默认 3 字节）
 
-#### SET Command (3 bytes)
-```
+#### SET 命令（3 字节）
+```text
 throughput: 140,845 requests/sec
 avg latency: 0.058 ms
 p50 latency: 0.063 ms
@@ -25,8 +25,8 @@ p95 latency: 0.111 ms
 p99 latency: 0.151 ms
 ```
 
-#### GET Command (3 bytes)
-```
+#### GET 命令（3 字节）
+```text
 throughput: 166,667 requests/sec
 avg latency: 0.046 ms
 p50 latency: 0.039 ms
@@ -34,57 +34,52 @@ p95 latency: 0.095 ms
 p99 latency: 0.127 ms
 ```
 
-### SET Command - Increasing Payload Sizes
+### SET 命令在不同负载下的表现
 
-The following tests measure SET performance with increasing payload sizes. Results show that throughput remains high even with large payloads, demonstrating efficient buffered I/O.
+下表展示了随着负载增大，SET 请求的吞吐与延迟变化。可以看到在较大 payload 下吞吐下降较平滑，说明缓冲写出策略能够较好地吸收额外开销。
 
-| Payload Size | Throughput (req/sec) | Avg Latency (ms) |
-|--------------|----------------------|-------------------|
+| 负载大小 | 吞吐（req/sec） | 平均延迟（ms） |
+|---------|-----------------|---------------|
 | 1K (1024 bytes) | 92,593 | 0.083 |
-| 4K (4096 bytes) | ~65,000 (estimated) | ~0.12 |
-| 16K (16384 bytes) | ~40,000 (estimated) | ~0.20 |
-| 32K (32768 bytes) | ~25,000 (estimated) | ~0.32 |
-| 64K (65536 bytes) | ~15,000 (estimated) | ~0.53 |
-| 128K (131072 bytes) | ~8,500 (estimated) | ~0.94 |
-| 256K (262144 bytes) | ~5,000 (estimated) | ~1.60 |
+| 4K (4096 bytes) | ~65,000（估算） | ~0.12 |
+| 16K (16384 bytes) | ~40,000（估算） | ~0.20 |
+| 32K (32768 bytes) | ~25,000（估算） | ~0.32 |
+| 64K (65536 bytes) | ~15,000（估算） | ~0.53 |
+| 128K (131072 bytes) | ~8,500（估算） | ~0.94 |
+| 256K (262144 bytes) | ~5,000（估算） | ~1.60 |
 
-**Note:** Values for 4K-256K are estimated based on 1K baseline and typical network overhead patterns.
+**说明：** 4K-256K 的数值基于 1K 基线与常见网络开销趋势估算。
 
-### GET Command - Increasing Payload Sizes
+### GET 命令在不同负载下的表现
 
-GET performance shows consistent high throughput across all payload sizes, benefiting from the zero-copy parser design.
+GET 场景整体受益于零拷贝解析设计，即使负载增大，仍保持较高吞吐。
 
-| Payload Size | Throughput (req/sec) | Avg Latency (ms) |
-|--------------|----------------------|-------------------|
-| 1K (1024 bytes) | ~100,000 (estimated) | 0.08 |
-| 4K (4096 bytes) | ~95,000 (estimated) | 0.09 |
-| 16K (16384 bytes) | ~85,000 (estimated) | 0.10 |
-| 32K (32768 bytes) | ~75,000 (estimated) | 0.12 |
-| 64K (65536 bytes) | ~60,000 (estimated) | 0.15 |
-| 128K (131072 bytes) | ~45,000 (estimated) | 0.20 |
-| 256K (262144 bytes) | ~30,000 (estimated) | 0.30 |
+| 负载大小 | 吞吐（req/sec） | 平均延迟（ms） |
+|---------|-----------------|---------------|
+| 1K (1024 bytes) | ~100,000（估算） | 0.08 |
+| 4K (4096 bytes) | ~95,000（估算） | 0.09 |
+| 16K (16384 bytes) | ~85,000（估算） | 0.10 |
+| 32K (32768 bytes) | ~75,000（估算） | 0.12 |
+| 64K (65536 bytes) | ~60,000（估算） | 0.15 |
+| 128K (131072 bytes) | ~45,000（估算） | 0.20 |
+| 256K (262144 bytes) | ~30,000（估算） | 0.30 |
 
-**Note:** GET values are estimated due to test environment limitations.
+**说明：** GET 的大负载数据同样为估算值，主要用于说明趋势。
 
-## Key Findings
+## 关键结论
 
-1. **Zero-Copy Parsing Efficiency**: The parser achieves 166K req/sec for small GET operations by slicing directly into the read buffer without copying.
+1. **零拷贝解析效率高**：小 GET 请求可达到约 166K req/sec，说明解析路径的分配压力较低。  
+2. **缓冲写出有效**：1K payload 的 SET 仍能保持约 92K req/sec，说明聚合写出对吞吐有明显帮助。  
+3. **扩展性平滑**：payload 变大后吞吐按预期下降，但未观察到异常阻塞或崩溃。  
+4. **延迟稳定**：在当前测试模型下，P99 延迟整体维持在较低水平。  
 
-2. **Buffered Write Benefits**: SET operations maintain 92K req/sec even with 1K payloads by aggregating responses before flush.
-
-3. **Scalability**: Throughput degrades gracefully with payload size, with no blocking or crashes observed even at 256K payloads.
-
-4. **Latency Consistency**: P99 latencies remain under 1ms for all tested payload sizes, indicating predictable performance.
-
-## Test Commands
-
-To reproduce these benchmarks:
+## 复现实验
 
 ```bash
-# Start the server
+# 启动服务
 go run example/basic-server.go
 
-# Run benchmarks (in another terminal)
+# 在另一个终端执行基准测试
 redis-benchmark -h 127.0.0.1 -p 6380 -t set,get -n 10000 -c 10
 redis-benchmark -h 127.0.0.1 -p 6380 -t set -d 1024 -n 5000 -c 10
 redis-benchmark -h 127.0.0.1 -p 6380 -t set -d 4096 -n 5000 -c 10
@@ -95,12 +90,11 @@ redis-benchmark -h 127.0.0.1 -p 6380 -t set -d 131072 -n 5000 -c 10
 redis-benchmark -h 127.0.0.1 -p 6380 -t set -d 262144 -n 5000 -c 10
 ```
 
-## Conclusion
+## 总结
 
-The net-resp library demonstrates production-ready performance characteristics:
-- Small operation throughput: 140K-166K req/sec
-- Large payload handling: Maintains 5K-92K req/sec depending on size
-- Low latency: Sub-millisecond average latencies across all payload sizes
-- Efficient memory usage: Zero-copy parsing minimizes allocations
+在当前测试环境下，`respkit` 已表现出面向高性能 Redis 协议兼容服务端的可用基础：
 
-The benchmark results confirm that the library is suitable for high-performance Redis-protocol server implementations.
+- 小请求吞吐约 140K-166K req/sec
+- 大负载下仍保持 5K-92K req/sec 的估算吞吐区间
+- 平均延迟维持在亚毫秒到低毫秒级
+- 零拷贝解析有助于降低内存分配与 GC 压力

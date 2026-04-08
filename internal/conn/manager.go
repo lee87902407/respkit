@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/yanjie/netgo/internal/session"
+	"github.com/lee87902407/respkit/internal/session"
 )
 
 var (

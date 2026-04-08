@@ -1,4 +1,4 @@
-package netgo
+package respkit
 
 import "strings"
 
@@ -21,7 +21,7 @@ func NewMux() *Mux {
 // Register adds a handler for a command name.
 func (m *Mux) Register(cmd string, handler Handler) {
 	if handler == nil {
-		panic("netgo: nil handler")
+		panic("respkit: nil handler")
 	}
 	m.handlers[strings.ToLower(cmd)] = handler
 }
@@ -51,7 +51,7 @@ func (m *Mux) HandleCommand(ctx *Context) error {
 	return m.notFound.Handle(ctx)
 }
 
-// Handle implements the netgo.Handler interface for Mux.
+// Handle implements the respkit.Handler interface for Mux.
 func (m *Mux) Handle(ctx *Context) error {
 	return m.HandleCommand(ctx)
 }

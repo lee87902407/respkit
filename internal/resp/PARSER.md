@@ -136,7 +136,7 @@ package main
 import (
     "bufio"
     "net"
-    "github.com/yanjie/netgo/internal/resp"
+    "github.com/lee87902407/respkit/internal/resp"
 )
 
 func handleConnection(conn net.Conn) {

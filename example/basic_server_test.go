@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/yanjie/netgo"
-	"github.com/yanjie/netgo/internal/session"
+	"github.com/lee87902407/respkit"
+	"github.com/lee87902407/respkit/internal/session"
 )
 
 type exampleConn struct {
@@ -15,14 +15,14 @@ type exampleConn struct {
 	lastError string
 }
 
-func (c *exampleConn) Session() *session.Session  { return nil }
-func (c *exampleConn) SetData(interface{})        {}
-func (c *exampleConn) Close() error               { return nil }
-func (c *exampleConn) RemoteAddr() net.Addr       { return nil }
-func (c *exampleConn) Detach() netgo.DetachedConn { return nil }
-func (c *exampleConn) WriteInt(int64) error       { return nil }
-func (c *exampleConn) WriteArray(int) error       { return nil }
-func (c *exampleConn) WriteAny(interface{}) error { return nil }
+func (c *exampleConn) Session() *session.Session    { return nil }
+func (c *exampleConn) SetData(interface{})          {}
+func (c *exampleConn) Close() error                 { return nil }
+func (c *exampleConn) RemoteAddr() net.Addr         { return nil }
+func (c *exampleConn) Detach() respkit.DetachedConn { return nil }
+func (c *exampleConn) WriteInt(int64) error         { return nil }
+func (c *exampleConn) WriteArray(int) error         { return nil }
+func (c *exampleConn) WriteAny(interface{}) error   { return nil }
 
 func (c *exampleConn) WriteString(s string) error {
 	c.buf.WriteString("+" + s + "\r\n")
@@ -53,7 +53,7 @@ func TestNewExampleMuxHandlesPingSetAndGet(t *testing.T) {
 	mux := newExampleMux()
 	conn := &exampleConn{}
 
-	if err := mux.HandleCommand(&netgo.Context{Conn: conn, Command: netgo.Command{Args: [][]byte{[]byte("PING")}}}); err != nil {
+	if err := mux.HandleCommand(&respkit.Context{Conn: conn, Command: respkit.Command{Args: [][]byte{[]byte("PING")}}}); err != nil {
 		t.Fatalf("PING error = %v", err)
 	}
 	if got := conn.buf.String(); got != "+PONG\r\n" {
@@ -61,7 +61,7 @@ func TestNewExampleMuxHandlesPingSetAndGet(t *testing.T) {
 	}
 
 	conn.buf.Reset()
-	if err := mux.HandleCommand(&netgo.Context{Conn: conn, Command: netgo.Command{Args: [][]byte{[]byte("SET"), []byte("key"), []byte("value")}}}); err != nil {
+	if err := mux.HandleCommand(&respkit.Context{Conn: conn, Command: respkit.Command{Args: [][]byte{[]byte("SET"), []byte("key"), []byte("value")}}}); err != nil {
 		t.Fatalf("SET error = %v", err)
 	}
 	if got := conn.buf.String(); got != "+OK\r\n" {
@@ -69,7 +69,7 @@ func TestNewExampleMuxHandlesPingSetAndGet(t *testing.T) {
 	}
 
 	conn.buf.Reset()
-	if err := mux.HandleCommand(&netgo.Context{Conn: conn, Command: netgo.Command{Args: [][]byte{[]byte("GET"), []byte("key")}}}); err != nil {
+	if err := mux.HandleCommand(&respkit.Context{Conn: conn, Command: respkit.Command{Args: [][]byte{[]byte("GET"), []byte("key")}}}); err != nil {
 		t.Fatalf("GET error = %v", err)
 	}
 	if got := conn.buf.String(); got != "$5\r\nvalue\r\n" {
@@ -77,7 +77,7 @@ func TestNewExampleMuxHandlesPingSetAndGet(t *testing.T) {
 	}
 
 	conn.buf.Reset()
-	if err := mux.HandleCommand(&netgo.Context{Conn: conn, Command: netgo.Command{Args: [][]byte{[]byte("GET"), []byte("missing")}}}); err != nil {
+	if err := mux.HandleCommand(&respkit.Context{Conn: conn, Command: respkit.Command{Args: [][]byte{[]byte("GET"), []byte("missing")}}}); err != nil {
 		t.Fatalf("GET missing error = %v", err)
 	}
 	if got := conn.buf.String(); got != "$-1\r\n" {
@@ -89,7 +89,7 @@ func TestNewExampleMuxValidatesArity(t *testing.T) {
 	mux := newExampleMux()
 	conn := &exampleConn{}
 
-	if err := mux.HandleCommand(&netgo.Context{Conn: conn, Command: netgo.Command{Args: [][]byte{[]byte("SET"), []byte("only-key")}}}); err != nil {
+	if err := mux.HandleCommand(&respkit.Context{Conn: conn, Command: respkit.Command{Args: [][]byte{[]byte("SET"), []byte("only-key")}}}); err != nil {
 		t.Fatalf("SET arity error = %v", err)
 	}
 	if conn.lastError != "ERR wrong number of arguments for 'set'" {
@@ -98,7 +98,7 @@ func TestNewExampleMuxValidatesArity(t *testing.T) {
 
 	conn.buf.Reset()
 	conn.lastError = ""
-	if err := mux.HandleCommand(&netgo.Context{Conn: conn, Command: netgo.Command{Args: [][]byte{[]byte("GET")}}}); err != nil {
+	if err := mux.HandleCommand(&respkit.Context{Conn: conn, Command: respkit.Command{Args: [][]byte{[]byte("GET")}}}); err != nil {
 		t.Fatalf("GET arity error = %v", err)
 	}
 	if conn.lastError != "ERR wrong number of arguments for 'get'" {

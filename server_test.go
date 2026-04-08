@@ -1,4 +1,4 @@
-package netgo
+package respkit
 
 import (
 	"net"
@@ -70,7 +70,7 @@ func TestServer_ListenAndServe_Unix(t *testing.T) {
 	})
 
 	// Create server with unix socket
-	socketPath := "/tmp/test-netgo-server.sock"
+	socketPath := "/tmp/test-respkit-server.sock"
 	config := &Config{
 		Addr:    socketPath,
 		Network: "unix",

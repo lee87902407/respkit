@@ -1,4 +1,4 @@
-package netgo
+package respkit
 
 import (
 	"bytes"
@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/yanjie/netgo/internal/session"
+	"github.com/lee87902407/respkit/internal/session"
 )
 
 type stubAddr string

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`net-resp` is a high-performance Go library for building Redis-protocol compatible network servers. It provides zero-copy RESP (Redis Serialization Protocol) parsing, connection pooling, session management, and command routing.
+`respkit` is a high-performance Go library for building Redis-protocol compatible network servers. It provides zero-copy RESP (Redis Serialization Protocol) parsing, connection pooling, session management, and command routing.
 
 ## Key Commands
 
@@ -48,7 +48,7 @@ redis-benchmark -h 127.0.0.1 -p 6380 -t set,get -d 4096 -n 10000
 ## Architecture
 
 ### Layer Structure
-- **`netgo.go`**: Public API, `Server` type, `Config`, session allocator interface
+- **`respkit.go`**: Public API, `Server` type, `Config`, session allocator interface
 - **`internal/conn/`**: Connection management, pooling, listener abstraction
 - **`internal/resp/`**: Zero-copy RESP parser and buffered writer
 - **`internal/session/`**: Per-connection session state
@@ -56,9 +56,9 @@ redis-benchmark -h 127.0.0.1 -p 6380 -t set,get -d 4096 -n 10000
 - **`pubsub.go`**: Publish/subscribe with pattern matching
 
 ### Key Types
-- `netgo.Server`: Main server with lifecycle (`ListenAndServe`, `Shutdown`)
-- `netgo.Mux`: Command multiplexer routing to handlers
-- `netgo.Handler`: Interface for command handlers
+- `respkit.Server`: Main server with lifecycle (`ListenAndServe`, `Shutdown`)
+- `respkit.Mux`: Command multiplexer routing to handlers
+- `respkit.Handler`: Interface for command handlers
 - `conn.ConnectionManager`: Accepts connections, manages pool, handles graceful shutdown
 - `conn.Conn`: Connection wrapper with buffers, parser, writer, session binding
 - `resp.Parser`: Zero-copy RESP parser (resettable, incremental)
@@ -105,5 +105,5 @@ redis-benchmark -h 127.0.0.1 -p 6380 -t set,get -d 4096 -n 10000
 ## Coverage Targets
 
 - Overall: 80%+ (current: 57%)
-- Hot spots: `internal/conn/conn.go`, `netgo.go`
+- Hot spots: `internal/conn/conn.go`, `respkit.go`
 - Well covered: `internal/session` (100%), `internal/resp` (84%)

@@ -1,4 +1,4 @@
-package netgo
+package respkit
 
 import (
 	"path"

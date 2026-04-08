@@ -4,20 +4,20 @@ import (
 	"log"
 	"sync"
 
-	"github.com/yanjie/netgo"
+	"github.com/lee87902407/respkit"
 )
 
-func newExampleMux() *netgo.Mux {
+func newExampleMux() *respkit.Mux {
 	var (
 		mu    sync.RWMutex
 		store = make(map[string][]byte)
 	)
 
-	mux := netgo.NewMux()
-	mux.HandleFunc("ping", func(ctx *netgo.Context) error {
+	mux := respkit.NewMux()
+	mux.HandleFunc("ping", func(ctx *respkit.Context) error {
 		return ctx.Conn.WriteString("PONG")
 	})
-	mux.HandleFunc("set", func(ctx *netgo.Context) error {
+	mux.HandleFunc("set", func(ctx *respkit.Context) error {
 		if len(ctx.Command.Args) != 3 {
 			return ctx.Conn.WriteError("ERR wrong number of arguments for 'set'")
 		}
@@ -26,7 +26,7 @@ func newExampleMux() *netgo.Mux {
 		mu.Unlock()
 		return ctx.Conn.WriteString("OK")
 	})
-	mux.HandleFunc("get", func(ctx *netgo.Context) error {
+	mux.HandleFunc("get", func(ctx *respkit.Context) error {
 		if len(ctx.Command.Args) != 2 {
 			return ctx.Conn.WriteError("ERR wrong number of arguments for 'get'")
 		}
@@ -41,12 +41,12 @@ func newExampleMux() *netgo.Mux {
 	return mux
 }
 
-func newExampleServer(addr string) *netgo.Server {
-	return netgo.NewServer(&netgo.Config{Addr: addr, Network: "tcp"}, newExampleMux())
+func newExampleServer(addr string) *respkit.Server {
+	return respkit.NewServer(&respkit.Config{Addr: addr, Network: "tcp"}, newExampleMux())
 }
 
 func main() {
 	server := newExampleServer(":6380")
-	log.Println("netgo example listening on :6380")
+	log.Println("respkit example listening on :6380")
 	log.Fatal(server.ListenAndServe())
 }

@@ -1,4 +1,4 @@
-package netgo
+package respkit
 
 import (
 	"fmt"
@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	iconn "github.com/yanjie/netgo/internal/conn"
-	"github.com/yanjie/netgo/internal/session"
+	iconn "github.com/lee87902407/respkit/internal/conn"
+	"github.com/lee87902407/respkit/internal/session"
 )
 
 // Server represents a Redis protocol server

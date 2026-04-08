@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/yanjie/netgo/internal/resp"
+	"github.com/lee87902407/respkit/internal/resp"
 )
 
 // TestPoolGet verifies that Get returns properly initialized connections
