@@ -16,14 +16,14 @@ func TestNewSessionInitializesFields(t *testing.T) {
 	if sess.CreatedAt.Before(before) || sess.CreatedAt.After(after) {
 		t.Fatalf("CreatedAt = %v, want between %v and %v", sess.CreatedAt, before, after)
 	}
-	if !sess.LastSeen.Equal(sess.CreatedAt) {
-		t.Fatalf("LastSeen = %v, want %v", sess.LastSeen, sess.CreatedAt)
+	if !sess.LastSeenAt().Equal(sess.CreatedAt) {
+		t.Fatalf("LastSeen = %v, want %v", sess.LastSeenAt(), sess.CreatedAt)
 	}
 }
 
 func TestSessionCountersAndLastSeen(t *testing.T) {
 	sess := NewSession(7)
-	firstSeen := sess.LastSeen
+	firstSeen := sess.LastSeenAt()
 	time.Sleep(time.Millisecond)
 
 	sess.UpdateLastSeen()
@@ -32,16 +32,157 @@ func TestSessionCountersAndLastSeen(t *testing.T) {
 	sess.AddBytesRead(12)
 	sess.AddBytesWritten(34)
 
-	if !sess.LastSeen.After(firstSeen) {
-		t.Fatalf("LastSeen = %v, want after %v", sess.LastSeen, firstSeen)
+	if !sess.LastSeenAt().After(firstSeen) {
+		t.Fatalf("LastSeen = %v, want after %v", sess.LastSeenAt(), firstSeen)
 	}
-	if sess.CommandsProcessed != 2 {
-		t.Fatalf("CommandsProcessed = %d, want 2", sess.CommandsProcessed)
+	if sess.CommandsCount() != 2 {
+		t.Fatalf("CommandsProcessed = %d, want 2", sess.CommandsCount())
 	}
-	if sess.BytesRead != 12 {
-		t.Fatalf("BytesRead = %d, want 12", sess.BytesRead)
+	if sess.BytesReadCount() != 12 {
+		t.Fatalf("BytesRead = %d, want 12", sess.BytesReadCount())
 	}
-	if sess.BytesWritten != 34 {
-		t.Fatalf("BytesWritten = %d, want 34", sess.BytesWritten)
+	if sess.BytesWrittenCount() != 34 {
+		t.Fatalf("BytesWritten = %d, want 34", sess.BytesWrittenCount())
 	}
+}
+
+func TestSessionCloserAccessor(t *testing.T) {
+	sess := NewSession(1)
+	if sess.closer != nil {
+		t.Fatal("expected nil closer on new session")
+	}
+
+	c := &mockCloser{}
+	sess.SetCloser(c)
+	if sess.closer != c {
+		t.Fatal("SetCloser did not set closer")
+	}
+}
+
+func TestSessionStartAndStop(t *testing.T) {
+	sess := NewSession(1)
+
+	done := make(chan struct{})
+	sess.Start(func() {
+		<-done
+	})
+
+	if sess.IsClosed() {
+		t.Fatal("session should not be closed after Start")
+	}
+
+	close(done)
+	sess.Stop() // should return immediately since handle exited
+}
+
+func TestSessionGracefulStop(t *testing.T) {
+	sess := NewSession(1)
+	running := make(chan struct{})
+	exited := make(chan struct{})
+
+	sess.Start(func() {
+		close(running)
+		for {
+			if sess.ShouldStop() {
+				close(exited)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	})
+
+	<-running
+	sess.Stop()
+
+	select {
+	case <-exited:
+		// handle loop exited
+	case <-time.After(time.Second):
+		t.Fatal("handle loop did not exit after Stop")
+	}
+}
+
+func TestSessionForcedClose(t *testing.T) {
+	sess := NewSession(1)
+	closer := &mockCloser{}
+	sess.SetCloser(closer)
+
+	sess.Start(func() {
+		for {
+			if sess.ShouldStop() {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	})
+
+	err := sess.Close()
+	if err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if !closer.closed {
+		t.Fatal("Close() did not close the closer")
+	}
+	if !sess.IsClosed() {
+		t.Fatal("session should be closed after Close()")
+	}
+}
+
+func TestSessionOnRemove(t *testing.T) {
+	sess := NewSession(1)
+	removeCh := make(chan struct{}, 1)
+	sess.SetOnRemove(func(ss *Session) {
+		if ss.ID != 1 {
+			t.Errorf("onRemove got session ID %d, want 1", ss.ID)
+		}
+		close(removeCh)
+	})
+
+	sess.Start(func() {})
+
+	select {
+	case <-removeCh:
+		// onRemove was called
+	case <-time.After(time.Second):
+		t.Fatal("onRemove was not called")
+	}
+}
+
+func TestSessionShouldStop(t *testing.T) {
+	sess := NewSession(1)
+	if sess.ShouldStop() {
+		t.Fatal("new session should not ShouldStop")
+	}
+
+	sess.stopFlag.Store(true)
+	if !sess.ShouldStop() {
+		t.Fatal("session should ShouldStop after stopFlag set")
+	}
+}
+
+func TestSessionStopIdempotent(t *testing.T) {
+	sess := NewSession(1)
+	sess.Start(func() {})
+
+	// Multiple stops should not panic
+	sess.Stop()
+	sess.Stop()
+}
+
+func TestSessionCloseIdempotent(t *testing.T) {
+	sess := NewSession(1)
+	sess.Start(func() {})
+
+	// Multiple closes should not panic
+	_ = sess.Close()
+	_ = sess.Close()
+}
+
+type mockCloser struct {
+	closed bool
+}
+
+func (m *mockCloser) Close() error {
+	m.closed = true
+	return nil
 }

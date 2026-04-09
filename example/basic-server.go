@@ -2,7 +2,10 @@ package main
 
 import (
 	"log"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 
 	"github.com/lee87902407/respkit"
 )
@@ -38,15 +41,29 @@ func newExampleMux() *respkit.Mux {
 		}
 		return ctx.Conn.WriteBulk(value)
 	})
+
 	return mux
 }
 
-func newExampleServer(addr string) *respkit.Server {
-	return respkit.NewServer(&respkit.Config{Addr: addr, Network: "tcp"}, newExampleMux())
-}
-
 func main() {
-	server := newExampleServer(":6380")
-	log.Println("respkit example listening on :6380")
-	log.Fatal(server.ListenAndServe())
+	server := respkit.NewServer(&respkit.Config{
+		Addr:    ":6380",
+		Network: "tcp",
+	}, newExampleMux())
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		log.Println("Shutting down...")
+		if err := server.Shutdown(); err != nil {
+			log.Printf("shutdown error: %v", err)
+		}
+	}()
+
+	log.Println("Starting server on :6380")
+	if err := server.ListenAndServe(); err != nil {
+		log.Fatal(err)
+	}
+	log.Println("Server stopped")
 }

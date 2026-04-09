@@ -75,18 +75,19 @@ type stubConn struct {
 	detached *stubDetachedConn
 }
 
-func (c *stubConn) Session() *session.Session  { return nil }
-func (c *stubConn) SetData(interface{})        {}
-func (c *stubConn) WriteString(string) error   { return nil }
-func (c *stubConn) WriteBulk([]byte) error     { return nil }
-func (c *stubConn) WriteInt(int64) error       { return nil }
-func (c *stubConn) WriteArray(int) error       { return nil }
-func (c *stubConn) WriteNull() error           { return nil }
-func (c *stubConn) WriteError(string) error    { return nil }
-func (c *stubConn) WriteAny(interface{}) error { return nil }
-func (c *stubConn) Close() error               { return nil }
-func (c *stubConn) RemoteAddr() net.Addr       { return stubAddr("source") }
-func (c *stubConn) Detach() DetachedConn       { return c.detached }
+func (c *stubConn) Session() *session.Session    { return nil }
+func (c *stubConn) SetData(interface{})          {}
+func (c *stubConn) WriteString(s string) error   { return c.detached.WriteString(s) }
+func (c *stubConn) WriteBulk(b []byte) error     { return c.detached.WriteBulk(b) }
+func (c *stubConn) WriteInt(n int64) error       { return c.detached.WriteInt(n) }
+func (c *stubConn) WriteArray(n int) error       { return c.detached.WriteArray(n) }
+func (c *stubConn) WriteNull() error             { return c.detached.WriteNull() }
+func (c *stubConn) WriteError(msg string) error  { return c.detached.WriteError(msg) }
+func (c *stubConn) WriteAny(v interface{}) error { return c.detached.WriteAny(v) }
+func (c *stubConn) Flush() error                 { return c.detached.Flush() }
+func (c *stubConn) Close() error                 { return c.detached.Close() }
+func (c *stubConn) RemoteAddr() net.Addr         { return stubAddr("source") }
+func (c *stubConn) Detach() DetachedConn         { return c.detached }
 
 func TestPubSubPublishAndUnsubscribe(t *testing.T) {
 	ps := NewPubSub()

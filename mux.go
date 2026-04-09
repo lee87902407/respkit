@@ -51,7 +51,7 @@ func (m *Mux) HandleCommand(ctx *Context) error {
 	return m.notFound.Handle(ctx)
 }
 
-// Handle implements the respkit.Handler interface for Mux.
+// Handle implements the Handler interface for Mux.
 func (m *Mux) Handle(ctx *Context) error {
 	return m.HandleCommand(ctx)
 }

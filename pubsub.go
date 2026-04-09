@@ -6,7 +6,7 @@ import (
 )
 
 type pubSubClient struct {
-	conn DetachedConn
+	conn Conn
 	mu   sync.Mutex
 }
 
@@ -35,8 +35,7 @@ func (ps *PubSub) ensureClient(conn Conn) *pubSubClient {
 	if client, ok := ps.clients[conn]; ok {
 		return client
 	}
-	detached := conn.Detach()
-	client := &pubSubClient{conn: detached}
+	client := &pubSubClient{conn: conn}
 	ps.clients[conn] = client
 	ps.entries[conn] = make(map[pubSubEntry]struct{})
 	return client

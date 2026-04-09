@@ -1,53 +1,201 @@
 package session
 
 import (
+	"io"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// Session holds per-connection allocated state
+// Session holds per-connection state and is the primary lifecycle object.
 type Session struct {
-	ID                uint64
-	Data              interface{}     // User-defined session data
-	Conn              interface{}     // Back-reference to connection
-	CreatedAt         time.Time
-	LastSeen          time.Time
-	CommandsProcessed uint64
-	BytesRead         uint64
-	BytesWritten      uint64
-	// Transaction state
-	MultiActive       bool
-	WatchedKeys       map[string]bool
-	// Subscription state
-	SubscribedChannels map[string]bool
-	PatternSubs        map[string]bool
+	mu sync.RWMutex
+
+	ID        uint64
+	CreatedAt time.Time
+
+	// Lifecycle management.
+	done     chan struct{}   // closed when handle goroutine exits
+	stopFlag atomic.Bool    // set by Stop for graceful shutdown
+	closer   io.Closer      // underlying connection for forced close
+	onRemove func(*Session) // called when handle goroutine exits
+	closed   bool
+
+	// User data.
+	data interface{}
+
+	// Statistics.
+	lastSeen   time.Time
+	commands   uint64
+	bytesRead  uint64
+	bytesWrite uint64
+
+	// Transaction state.
+	multiActive bool
+	watchedKeys map[string]bool
+
+	// Subscription state.
+	subscribedChannels map[string]bool
+	patternSubs        map[string]bool
 }
 
-// NewSession creates a new session with the given ID
+// NewSession creates a new session with the given ID.
 func NewSession(id uint64) *Session {
 	now := time.Now()
 	return &Session{
 		ID:        id,
 		CreatedAt: now,
-		LastSeen:  now,
+		lastSeen:  now,
+		done:      make(chan struct{}),
 	}
 }
 
-// UpdateLastSeen updates the LastSeen timestamp to now
+// SetCloser sets the underlying closer for forced close.
+func (s *Session) SetCloser(c io.Closer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closer = c
+}
+
+// SetOnRemove sets the callback invoked when the handle goroutine exits.
+func (s *Session) SetOnRemove(fn func(*Session)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onRemove = fn
+}
+
+// Start runs the given handle function in a goroutine.
+// The done channel is closed when the handle function returns.
+func (s *Session) Start(handle func()) {
+	go func() {
+		defer close(s.done)
+		defer func() {
+			if fn := s.getOnRemove(); fn != nil {
+				fn(s)
+			}
+		}()
+		defer s.closeConn()
+		handle()
+	}()
+}
+
+// Stop performs a graceful stop by signaling the handle loop to exit.
+// It blocks until the handle goroutine has finished.
+func (s *Session) Stop() {
+	s.stopFlag.Store(true)
+	<-s.done
+}
+
+// Close performs a forced close by closing the underlying connection.
+// It blocks until the handle goroutine has finished.
+func (s *Session) Close() error {
+	s.mu.Lock()
+	if !s.closed {
+		s.closed = true
+		if s.closer != nil {
+			s.closer.Close()
+			s.closer = nil
+		}
+	}
+	s.mu.Unlock()
+	<-s.done
+	return nil
+}
+
+// ShouldStop returns true if the handle loop should exit.
+func (s *Session) ShouldStop() bool {
+	return s.stopFlag.Load() || s.IsClosed()
+}
+
+// IsClosed returns whether the session has been closed.
+func (s *Session) IsClosed() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.closed
+}
+
+func (s *Session) closeConn() {
+	s.mu.Lock()
+	if s.closer != nil {
+		s.closer.Close()
+		s.closer = nil
+	}
+	s.closed = true
+	s.mu.Unlock()
+}
+
+func (s *Session) getOnRemove() func(*Session) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.onRemove
+}
+
+// SetData stores user-defined session data.
+func (s *Session) SetData(data interface{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data = data
+}
+
+// DataValue returns the stored user-defined session data.
+func (s *Session) DataValue() interface{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data
+}
+
+// UpdateLastSeen updates the LastSeen timestamp to now.
 func (s *Session) UpdateLastSeen() {
-	s.LastSeen = time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastSeen = time.Now()
 }
 
-// IncrementCommands increments the command counter
+// LastSeenAt returns the last-seen timestamp.
+func (s *Session) LastSeenAt() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastSeen
+}
+
+// IncrementCommands increments the command counter.
 func (s *Session) IncrementCommands() {
-	s.CommandsProcessed++
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.commands++
 }
 
-// AddBytesRead adds bytes to the read counter
+// CommandsCount returns the processed command count.
+func (s *Session) CommandsCount() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.commands
+}
+
+// AddBytesRead adds bytes to the read counter.
 func (s *Session) AddBytesRead(n uint64) {
-	s.BytesRead += n
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bytesRead += n
 }
 
-// AddBytesWritten adds bytes to the write counter
+// BytesReadCount returns the number of read bytes.
+func (s *Session) BytesReadCount() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.bytesRead
+}
+
+// AddBytesWritten adds bytes to the write counter.
 func (s *Session) AddBytesWritten(n uint64) {
-	s.BytesWritten += n
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bytesWrite += n
+}
+
+// BytesWrittenCount returns the number of written bytes.
+func (s *Session) BytesWrittenCount() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.bytesWrite
 }

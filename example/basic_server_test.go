@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/lee87902407/respkit"
 	"github.com/lee87902407/respkit/internal/session"
@@ -20,9 +21,10 @@ func (c *exampleConn) SetData(interface{})          {}
 func (c *exampleConn) Close() error                 { return nil }
 func (c *exampleConn) RemoteAddr() net.Addr         { return nil }
 func (c *exampleConn) Detach() respkit.DetachedConn { return nil }
+func (c *exampleConn) Flush() error                 { return nil }
 func (c *exampleConn) WriteInt(int64) error         { return nil }
 func (c *exampleConn) WriteArray(int) error         { return nil }
-func (c *exampleConn) WriteAny(interface{}) error   { return nil }
+func (c *exampleConn) WriteAny(interface{}) error    { return nil }
 
 func (c *exampleConn) WriteString(s string) error {
 	c.buf.WriteString("+" + s + "\r\n")
@@ -106,9 +108,34 @@ func TestNewExampleMuxValidatesArity(t *testing.T) {
 	}
 }
 
-func TestNewExampleServerUsesConfiguredAddress(t *testing.T) {
-	server := newExampleServer(":6380")
-	if server == nil {
-		t.Fatal("newExampleServer() returned nil")
+func TestServerLifecycle(t *testing.T) {
+	server := respkit.NewServer(&respkit.Config{
+		Addr:    "127.0.0.1:0",
+		Network: "tcp",
+	}, newExampleMux())
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ListenAndServe()
+	}()
+
+	// Wait for listener
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if server.Addr() != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if server.Addr() == nil {
+		t.Fatal("server did not start in time")
+	}
+
+	if err := server.Shutdown(); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("ListenAndServe() error = %v", err)
 	}
 }
