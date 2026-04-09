@@ -283,7 +283,7 @@ func (s *Server) makeHandle(sc *serverConn) func() {
 				return
 			}
 
-			n, err := sc.conn.Read(buf)
+			n, err := sc.conn.RawRead(buf)
 			if err != nil {
 				if ne, ok := err.(net.Error); ok && ne.Timeout() {
 					if sess.ShouldStop() {
@@ -330,7 +330,7 @@ func (s *Server) makeHandle(sc *serverConn) func() {
 					if _, err := s.factory.CreateCommand(name, result.Raw, result.Args); err != nil {
 						writer.AppendError(err.Error())
 						bytesToWrite := len(writer.Bytes())
-						if flushErr := writer.Flush(sc.conn); flushErr != nil {
+						if flushErr := writer.Flush(sc.conn.NetConn()); flushErr != nil {
 							return
 						}
 						sess.AddBytesWritten(uint64(bytesToWrite))
@@ -426,7 +426,7 @@ func (c *serverConn) flushLocked() error {
 	if n == 0 {
 		return nil
 	}
-	if err := c.writer.Flush(c.conn); err != nil {
+	if err := c.writer.Flush(c.conn.NetConn()); err != nil {
 		return err
 	}
 	c.sess.AddBytesWritten(uint64(n))
@@ -521,7 +521,7 @@ func (d *detachedConn) flushLocked() error {
 	if n == 0 {
 		return nil
 	}
-	if err := d.writer.Flush(d.conn); err != nil {
+	if err := d.writer.Flush(d.conn.NetConn()); err != nil {
 		return err
 	}
 	d.sess.AddBytesWritten(uint64(n))
