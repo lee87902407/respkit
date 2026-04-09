@@ -19,36 +19,22 @@ import (
 
 const stopPollInterval = 100 * time.Millisecond
 
-// CommandFactory creates commands from raw parsed data.
-type CommandFactory interface {
-	CreateCommand(name string, raw []byte, args [][]byte) (Command, error)
-}
-
-// CommandFactoryFunc is a function adapter for CommandFactory.
-type CommandFactoryFunc func(name string, raw []byte, args [][]byte) (Command, error)
-
-func (f CommandFactoryFunc) CreateCommand(name string, raw []byte, args [][]byte) (Command, error) {
-	return f(name, raw, args)
-}
-
-// Handler processes a command.
-type Handler interface {
+// commandHandler processes a command.
+type commandHandler interface {
 	Handle(ctx *Context) error
 }
 
-// HandlerFunc is an adapter for functions.
-type HandlerFunc func(ctx *Context) error
-
-func (f HandlerFunc) Handle(ctx *Context) error {
-	return f(ctx)
+// commandFactory creates commands from raw parsed data.
+type commandFactory interface {
+	CreateCommand(name string, raw []byte, args [][]byte) (Command, error)
 }
 
 // Server represents a Redis protocol server.
 // It manages listening, session creation, command parsing, and shutdown.
 type Server struct {
 	config  *Config
-	handler Handler
-	factory CommandFactory
+	handler commandHandler
+	factory commandFactory
 
 	mu        sync.RWMutex
 	listener  net.Listener
@@ -62,7 +48,7 @@ type Server struct {
 }
 
 // NewServer creates a new server with an optional command handler.
-func NewServer(config *Config, handler ...Handler) *Server {
+func NewServer(config *Config, handler ...interface{ Handle(*Context) error }) *Server {
 	if config == nil {
 		config = &Config{}
 	}
@@ -104,7 +90,9 @@ func defaultConfig(config *Config) *Config {
 }
 
 // Register sets the command factory for the server.
-func (s *Server) Register(factory CommandFactory) {
+func (s *Server) Register(factory interface {
+	CreateCommand(name string, raw []byte, args [][]byte) (Command, error)
+}) {
 	s.factory = factory
 }
 
