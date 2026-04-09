@@ -11,6 +11,60 @@ import (
 	"github.com/lee87902407/respkit"
 )
 
+const (
+	testWaitTimeout = time.Second
+	pollInterval    = 10 * time.Millisecond
+)
+
+func startServerAsync(server *respkit.Server, start func() error) <-chan error {
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- start()
+	}()
+	return errCh
+}
+
+func waitForServerAddr(t *testing.T, server *respkit.Server, failureMessage string) string {
+	t.Helper()
+
+	if addr := server.Addr(); addr != nil {
+		return addr.String()
+	}
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	timeout := time.NewTimer(testWaitTimeout)
+	defer timeout.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if addr := server.Addr(); addr != nil {
+				return addr.String()
+			}
+		case <-timeout.C:
+			t.Fatal(failureMessage)
+		}
+	}
+}
+
+func waitForServerExit(t *testing.T, errCh <-chan error, failureMessage string) {
+	t.Helper()
+
+	timeout := time.NewTimer(testWaitTimeout)
+	defer timeout.Stop()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("server exited with error: %v", err)
+		}
+	case <-timeout.C:
+		t.Fatal(failureMessage)
+	}
+}
+
 func TestNewServerAcceptsTask1ConfigShape(t *testing.T) {
 	bytePool := mempool.New(mempool.DefaultOptions())
 	logger := blog.L()
@@ -28,34 +82,15 @@ func TestNewServerAcceptsTask1ConfigShape(t *testing.T) {
 		Logger:                logger,
 	})
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- server.Start()
-	}()
+	errCh := startServerAsync(server, server.Start)
 
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if server.Addr() != nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if server.Addr() == nil {
-		t.Fatal("server did not start with full task 1 config shape")
-	}
+	waitForServerAddr(t, server, "server did not start with full task 1 config shape")
 
 	if err := server.Stop(); err != nil {
 		t.Fatalf("Stop() failed = %v", err)
 	}
 
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("Start() failed = %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Start() did not return after Stop")
-	}
+	waitForServerExit(t, errCh, "Start() did not return after Stop")
 }
 
 func TestServer_StartAndStop(t *testing.T) {
@@ -64,25 +99,15 @@ func TestServer_StartAndStop(t *testing.T) {
 		Network: "tcp",
 	})
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- server.Start()
-	}()
+	errCh := startServerAsync(server, server.Start)
 
-	time.Sleep(100 * time.Millisecond)
+	waitForServerAddr(t, server, "server did not start before Stop")
 
 	if err := server.Stop(); err != nil {
 		t.Fatalf("Stop() failed = %v", err)
 	}
 
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("Start() failed = %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Start() did not return after Stop")
-	}
+	waitForServerExit(t, errCh, "Start() did not return after Stop")
 }
 
 func TestServer_Close(t *testing.T) {
@@ -91,49 +116,29 @@ func TestServer_Close(t *testing.T) {
 		Network: "tcp",
 	})
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- server.Start()
-	}()
+	errCh := startServerAsync(server, server.Start)
 
-	time.Sleep(100 * time.Millisecond)
+	waitForServerAddr(t, server, "server did not start before Close")
 
 	if err := server.Close(); err != nil {
 		t.Fatalf("Close() failed = %v", err)
 	}
 
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("Start() failed = %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Start() did not return after Close")
-	}
+	waitForServerExit(t, errCh, "Start() did not return after Close")
 }
 
 func TestServer_StopIdempotent(t *testing.T) {
 	server := respkit.NewServer(&respkit.Config{Addr: "127.0.0.1:0"})
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- server.Start()
-	}()
+	errCh := startServerAsync(server, server.Start)
 
-	time.Sleep(100 * time.Millisecond)
+	waitForServerAddr(t, server, "server did not start before first Stop")
 
 	if err := server.Stop(); err != nil {
 		t.Fatalf("First Stop() failed = %v", err)
 	}
 
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("Start() failed = %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Start() did not return after first Stop")
-	}
+	waitForServerExit(t, errCh, "Start() did not return after first Stop")
 
 	if err := server.Stop(); err != nil {
 		t.Fatalf("Second Stop() failed = %v", err)
@@ -147,25 +152,15 @@ func TestServer_ActiveSessions(t *testing.T) {
 		t.Errorf("ActiveSessions() = %d, want 0", count)
 	}
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- server.Start()
-	}()
+	errCh := startServerAsync(server, server.Start)
 
-	time.Sleep(100 * time.Millisecond)
+	waitForServerAddr(t, server, "server did not start before Stop")
 
 	if err := server.Stop(); err != nil {
 		t.Fatalf("Stop() failed = %v", err)
 	}
 
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("Start() failed = %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Start() did not return after Stop")
-	}
+	waitForServerExit(t, errCh, "Start() did not return after Stop")
 }
 
 func TestServer_Addr(t *testing.T) {
@@ -178,34 +173,15 @@ func TestServer_Addr(t *testing.T) {
 		t.Errorf("Addr() before start = %v, want nil", addr)
 	}
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- server.Start()
-	}()
+	errCh := startServerAsync(server, server.Start)
 
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if server.Addr() != nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if server.Addr() == nil {
-		t.Fatal("Addr() still nil after start")
-	}
+	waitForServerAddr(t, server, "Addr() still nil after start")
 
 	if err := server.Stop(); err != nil {
 		t.Fatalf("Stop() failed = %v", err)
 	}
 
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("Start() failed = %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Start() did not return after Stop")
-	}
+	waitForServerExit(t, errCh, "Start() did not return after Stop")
 }
 
 func TestServer_ListenAndServe(t *testing.T) {
@@ -219,23 +195,9 @@ func TestServer_ListenAndServe(t *testing.T) {
 		Network: "tcp",
 	}, handler)
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- server.ListenAndServe()
-	}()
+	errCh := startServerAsync(server, server.ListenAndServe)
 
-	deadline := time.Now().Add(time.Second)
-	var addr string
-	for time.Now().Before(deadline) {
-		if a := server.Addr(); a != nil {
-			addr = a.String()
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if addr == "" {
-		t.Fatal("server did not expose an address in time")
-	}
+	addr := waitForServerAddr(t, server, "server did not expose an address in time")
 
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -247,14 +209,7 @@ func TestServer_ListenAndServe(t *testing.T) {
 		t.Fatalf("Shutdown() failed = %v", err)
 	}
 
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("ListenAndServe() failed = %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("ListenAndServe() did not return after Shutdown")
-	}
+	waitForServerExit(t, errCh, "ListenAndServe() did not return after Shutdown")
 }
 
 func TestServer_HandlerPingPong(t *testing.T) {
@@ -268,23 +223,9 @@ func TestServer_HandlerPingPong(t *testing.T) {
 		Network: "tcp",
 	}, handler)
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- server.Start()
-	}()
+	errCh := startServerAsync(server, server.Start)
 
-	deadline := time.Now().Add(time.Second)
-	var addr string
-	for time.Now().Before(deadline) {
-		if a := server.Addr(); a != nil {
-			addr = a.String()
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if addr == "" {
-		t.Fatal("server did not start in time")
-	}
+	addr := waitForServerAddr(t, server, "server did not start in time")
 
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -310,12 +251,5 @@ func TestServer_HandlerPingPong(t *testing.T) {
 		t.Fatalf("Stop() failed = %v", err)
 	}
 
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("Start() failed = %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Start() did not return after Stop")
-	}
+	waitForServerExit(t, errCh, "Start() did not return after Stop")
 }
