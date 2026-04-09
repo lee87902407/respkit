@@ -6,25 +6,27 @@ import (
 	"github.com/lee87902407/respkit/internal/protocol"
 )
 
+type muxHandler func(*Context) error
+
 // Mux routes commands to registered handlers.
 type Mux struct {
-	handlers map[string]Handler
-	notFound Handler
+	handlers map[string]muxHandler
+	notFound muxHandler
 }
 
 // NewMux creates a new command multiplexer.
 func NewMux() *Mux {
 	return &Mux{
-		handlers: make(map[string]Handler),
-		notFound: HandlerFunc(func(ctx *Context) error {
+		handlers: make(map[string]muxHandler),
+		notFound: func(ctx *Context) error {
 			normalized := protocol.NormalizeCommandNameBytes(ctx.Command.Args[0])
 			return ctx.Conn.WriteError("ERR unknown command '" + normalized + "'")
-		}),
+		},
 	}
 }
 
 // Register adds a handler for a command name.
-func (m *Mux) Register(cmd string, handler Handler) {
+func (m *Mux) Register(cmd string, handler func(*Context) error) {
 	if handler == nil {
 		panic("respkit: nil handler")
 	}
@@ -33,11 +35,11 @@ func (m *Mux) Register(cmd string, handler Handler) {
 
 // HandleFunc registers a function handler for a command name.
 func (m *Mux) HandleFunc(cmd string, handler func(*Context) error) {
-	m.Register(cmd, HandlerFunc(handler))
+	m.Register(cmd, handler)
 }
 
 // SetNotFound sets the fallback handler used when no command matches.
-func (m *Mux) SetNotFound(handler Handler) {
+func (m *Mux) SetNotFound(handler func(*Context) error) {
 	if handler == nil {
 		return
 	}
@@ -51,12 +53,11 @@ func (m *Mux) HandleCommand(ctx *Context) error {
 	}
 	cmd := protocol.NormalizeCommandNameBytes(ctx.Command.Args[0])
 	if handler, ok := m.handlers[cmd]; ok {
-		return handler.Handle(ctx)
+		return handler(ctx)
 	}
-	return m.notFound.Handle(ctx)
+	return m.notFound(ctx)
 }
 
-// Handle implements the Handler interface for Mux.
 func (m *Mux) Handle(ctx *Context) error {
 	return m.HandleCommand(ctx)
 }

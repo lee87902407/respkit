@@ -5,7 +5,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	blog "github.com/lee87902407/basekit/log"
 	"github.com/lee87902407/basekit/mempool"
 	"github.com/lee87902407/respkit/internal/protocol"
 	"github.com/lee87902407/respkit/internal/session"
@@ -56,11 +55,6 @@ type ScopedResponse struct {
 	Session *session.Session
 	Value   protocol.RespValue
 	Scope   *mempool.Scope
-}
-
-// DefaultLogger returns the basekit logger when no explicit logger is supplied.
-func DefaultLogger() *zap.Logger {
-	return blog.L()
 }
 
 // Context provides context for command handling.

@@ -1,32 +1,54 @@
-package respkit
+package respkit_test
 
 import (
 	"bufio"
 	"net"
 	"testing"
 	"time"
+
+	"github.com/lee87902407/respkit"
 )
 
-func TestDefaultConfigPreservesDispatcherSettings(t *testing.T) {
-	cfg := defaultConfig(&Config{
+func TestNewServerAcceptsTask1ConfigShape(t *testing.T) {
+	server := respkit.NewServer(&respkit.Config{
+		Addr:                  "127.0.0.1:0",
 		DispatcherWorkers:     3,
 		QueueSize:             128,
 		MaxInFlightPerSession: 9,
 	})
 
-	if cfg.DispatcherWorkers != 3 {
-		t.Fatalf("DispatcherWorkers = %d, want %d", cfg.DispatcherWorkers, 3)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Start()
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if server.Addr() != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if cfg.QueueSize != 128 {
-		t.Fatalf("QueueSize = %d, want %d", cfg.QueueSize, 128)
+	if server.Addr() == nil {
+		t.Fatal("server did not start with task 1 config shape")
 	}
-	if cfg.MaxInFlightPerSession != 9 {
-		t.Fatalf("MaxInFlightPerSession = %d, want %d", cfg.MaxInFlightPerSession, 9)
+
+	if err := server.Stop(); err != nil {
+		t.Fatalf("Stop() failed = %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Start() failed = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Start() did not return after Stop")
 	}
 }
 
 func TestServer_StartAndStop(t *testing.T) {
-	server := NewServer(&Config{
+	server := respkit.NewServer(&respkit.Config{
 		Addr:    "127.0.0.1:0",
 		Network: "tcp",
 	})
@@ -53,7 +75,7 @@ func TestServer_StartAndStop(t *testing.T) {
 }
 
 func TestServer_Close(t *testing.T) {
-	server := NewServer(&Config{
+	server := respkit.NewServer(&respkit.Config{
 		Addr:    "127.0.0.1:0",
 		Network: "tcp",
 	})
@@ -80,7 +102,7 @@ func TestServer_Close(t *testing.T) {
 }
 
 func TestServer_StopIdempotent(t *testing.T) {
-	server := NewServer(&Config{Addr: "127.0.0.1:0"})
+	server := respkit.NewServer(&respkit.Config{Addr: "127.0.0.1:0"})
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -108,7 +130,7 @@ func TestServer_StopIdempotent(t *testing.T) {
 }
 
 func TestServer_ActiveSessions(t *testing.T) {
-	server := NewServer(&Config{Addr: "127.0.0.1:0"})
+	server := respkit.NewServer(&respkit.Config{Addr: "127.0.0.1:0"})
 
 	if count := server.ActiveSessions(); count != 0 {
 		t.Errorf("ActiveSessions() = %d, want 0", count)
@@ -136,7 +158,7 @@ func TestServer_ActiveSessions(t *testing.T) {
 }
 
 func TestServer_Addr(t *testing.T) {
-	server := NewServer(&Config{
+	server := respkit.NewServer(&respkit.Config{
 		Addr:    "127.0.0.1:0",
 		Network: "tcp",
 	})
@@ -176,11 +198,12 @@ func TestServer_Addr(t *testing.T) {
 }
 
 func TestServer_ListenAndServe(t *testing.T) {
-	handler := HandlerFunc(func(ctx *Context) error {
-		return nil
+	handler := respkit.NewMux()
+	handler.HandleFunc("ping", func(ctx *respkit.Context) error {
+		return ctx.Conn.WriteString("PONG")
 	})
 
-	server := NewServer(&Config{
+	server := respkit.NewServer(&respkit.Config{
 		Addr:    "127.0.0.1:0",
 		Network: "tcp",
 	}, handler)
@@ -190,7 +213,6 @@ func TestServer_ListenAndServe(t *testing.T) {
 		errCh <- server.ListenAndServe()
 	}()
 
-	// Wait for listener and connect.
 	deadline := time.Now().Add(time.Second)
 	var addr string
 	for time.Now().Before(deadline) {
@@ -225,11 +247,12 @@ func TestServer_ListenAndServe(t *testing.T) {
 }
 
 func TestServer_HandlerPingPong(t *testing.T) {
-	handler := HandlerFunc(func(ctx *Context) error {
+	handler := respkit.NewMux()
+	handler.HandleFunc("ping", func(ctx *respkit.Context) error {
 		return ctx.Conn.WriteString("PONG")
 	})
 
-	server := NewServer(&Config{
+	server := respkit.NewServer(&respkit.Config{
 		Addr:    "127.0.0.1:0",
 		Network: "tcp",
 	}, handler)
@@ -239,7 +262,6 @@ func TestServer_HandlerPingPong(t *testing.T) {
 		errCh <- server.Start()
 	}()
 
-	// Wait for listener.
 	deadline := time.Now().Add(time.Second)
 	var addr string
 	for time.Now().Before(deadline) {
@@ -253,20 +275,17 @@ func TestServer_HandlerPingPong(t *testing.T) {
 		t.Fatal("server did not start in time")
 	}
 
-	// Connect and send PING.
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
 	defer conn.Close()
 
-	// Send RESP PING command.
 	_, err = conn.Write([]byte("*1\r\n$4\r\nPING\r\n"))
 	if err != nil {
 		t.Fatalf("failed to write: %v", err)
 	}
 
-	// Read response.
 	reader := bufio.NewReader(conn)
 	line, err := reader.ReadString('\n')
 	if err != nil {

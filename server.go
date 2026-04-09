@@ -10,44 +10,24 @@ import (
 	"sync/atomic"
 	"time"
 
+	blog "github.com/lee87902407/basekit/log"
 	iconn "github.com/lee87902407/respkit/internal/conn"
-	"github.com/lee87902407/respkit/internal/protocol"
 	"github.com/lee87902407/respkit/internal/resp"
 	"github.com/lee87902407/respkit/internal/session"
 )
 
 const stopPollInterval = 100 * time.Millisecond
 
-// CommandFactory creates commands from raw parsed data.
-type CommandFactory interface {
-	CreateCommand(name string, raw []byte, args [][]byte) (Command, error)
-}
-
-// CommandFactoryFunc is a function adapter for CommandFactory.
-type CommandFactoryFunc func(name string, raw []byte, args [][]byte) (Command, error)
-
-func (f CommandFactoryFunc) CreateCommand(name string, raw []byte, args [][]byte) (Command, error) {
-	return f(name, raw, args)
-}
-
-// Handler processes a command.
-type Handler interface {
+// commandHandler processes a command.
+type commandHandler interface {
 	Handle(ctx *Context) error
-}
-
-// HandlerFunc is an adapter for functions.
-type HandlerFunc func(ctx *Context) error
-
-func (f HandlerFunc) Handle(ctx *Context) error {
-	return f(ctx)
 }
 
 // Server represents a Redis protocol server.
 // It manages listening, session creation, command parsing, and shutdown.
 type Server struct {
 	config  *Config
-	handler Handler
-	factory CommandFactory
+	handler commandHandler
 
 	mu        sync.RWMutex
 	listener  net.Listener
@@ -61,7 +41,7 @@ type Server struct {
 }
 
 // NewServer creates a new server with an optional command handler.
-func NewServer(config *Config, handler ...Handler) *Server {
+func NewServer(config *Config, handler ...commandHandler) *Server {
 	if config == nil {
 		config = &Config{}
 	}
@@ -97,14 +77,9 @@ func defaultConfig(config *Config) *Config {
 		cfg.MaxInFlightPerSession = 1
 	}
 	if cfg.Logger == nil {
-		cfg.Logger = DefaultLogger()
+		cfg.Logger = blog.L()
 	}
 	return &cfg
-}
-
-// Register sets the command factory for the server.
-func (s *Server) Register(factory CommandFactory) {
-	s.factory = factory
 }
 
 // Addr returns the bound listener address after the server has started.
@@ -305,32 +280,20 @@ func (s *Server) makeHandle(sess *session.Session, conn *iconn.Conn) func() {
 				}
 
 				sess.IncrementCommands()
-
-				// Handler-based dispatch (primary).
-				if s.handler != nil {
-					ctx := &Context{
-						Conn:    sc,
-						Command: Command{Raw: result.Raw, Args: result.Args},
-						Session: sess,
-					}
-					if err := s.handler.Handle(ctx); err != nil {
-						sc.WriteError(err.Error())
-					}
-					_ = sc.Flush()
+				if s.handler == nil {
 					continue
 				}
 
-				// Factory-based dispatch (alternative).
-				if s.factory != nil {
-					name := protocol.NormalizeCommandNameBytes(result.Args[0])
-					if _, err := s.factory.CreateCommand(name, result.Raw, result.Args); err != nil {
-						writer.AppendError(err.Error())
-						bytesToWrite := len(writer.Bytes())
-						if flushErr := writer.Flush(conn); flushErr != nil {
-							return
-						}
-						sess.AddBytesWritten(uint64(bytesToWrite))
-					}
+				ctx := &Context{
+					Conn:    sc,
+					Command: Command{Raw: result.Raw, Args: result.Args},
+					Session: sess,
+				}
+				if err := s.handler.Handle(ctx); err != nil {
+					sc.WriteError(err.Error())
+				}
+				if err := sc.Flush(); err != nil {
+					return
 				}
 			}
 		}
