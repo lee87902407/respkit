@@ -1,6 +1,10 @@
 package respkit
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/lee87902407/respkit/internal/protocol"
+)
 
 // Mux routes commands to registered handlers.
 type Mux struct {
@@ -13,7 +17,8 @@ func NewMux() *Mux {
 	return &Mux{
 		handlers: make(map[string]Handler),
 		notFound: HandlerFunc(func(ctx *Context) error {
-			return ctx.Conn.WriteError("ERR unknown command '" + strings.ToLower(string(ctx.Command.Args[0])) + "'")
+			normalized := protocol.NormalizeCommandNameBytes(ctx.Command.Args[0])
+			return ctx.Conn.WriteError("ERR unknown command '" + normalized + "'")
 		}),
 	}
 }
@@ -44,7 +49,7 @@ func (m *Mux) HandleCommand(ctx *Context) error {
 	if len(ctx.Command.Args) == 0 {
 		return nil
 	}
-	cmd := strings.ToLower(string(ctx.Command.Args[0]))
+	cmd := protocol.NormalizeCommandNameBytes(ctx.Command.Args[0])
 	if handler, ok := m.handlers[cmd]; ok {
 		return handler.Handle(ctx)
 	}

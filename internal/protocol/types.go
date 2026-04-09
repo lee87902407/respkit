@@ -75,16 +75,14 @@ func (v RespValue) CommandName() string {
 		return ""
 	}
 	first := v.Array[0]
-	var raw []byte
 	switch first.Type {
 	case TypeBulkString:
-		raw = first.Bulk
+		return NormalizeCommandNameBytes(first.Bulk)
 	case TypeSimpleString:
-		raw = []byte(first.Str)
+		return NormalizeCommandNameString(first.Str)
 	default:
 		return ""
 	}
-	return strings.ToLower(string(raw))
 }
 
 // CommandArgs extracts command arguments from an Array type RespValue.
@@ -138,6 +136,8 @@ func (v RespValue) Equal(other RespValue) bool {
 	}
 }
 
+const utf8RuneSelf = 0x80
+
 func int64ToBytes(n int64) []byte {
 	if n == 0 {
 		return []byte{'0'}
@@ -158,4 +158,67 @@ func int64ToBytes(n int64) []byte {
 		buf[i] = '-'
 	}
 	return buf[i:]
+}
+
+// NormalizeCommandNameBytes lowercases a command name.
+// ASCII bytes use a fast path; non-ASCII falls back to strings.ToLower.
+func NormalizeCommandNameBytes(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	for i, b := range raw {
+		if b >= utf8RuneSelf {
+			return strings.ToLower(string(raw))
+		}
+		if b >= 'A' && b <= 'Z' {
+			buf := make([]byte, len(raw))
+			copy(buf, raw[:i])
+			buf[i] = b + ('a' - 'A')
+			for j := i + 1; j < len(raw); j++ {
+				c := raw[j]
+				if c >= utf8RuneSelf {
+					return strings.ToLower(string(raw))
+				}
+				if c >= 'A' && c <= 'Z' {
+					buf[j] = c + ('a' - 'A')
+					continue
+				}
+				buf[j] = c
+			}
+			return string(buf)
+		}
+	}
+	return string(raw)
+}
+
+// NormalizeCommandNameString lowercases a command name.
+// ASCII strings use a fast path; non-ASCII falls back to strings.ToLower.
+func NormalizeCommandNameString(s string) string {
+	if s == "" {
+		return ""
+	}
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		if b >= utf8RuneSelf {
+			return strings.ToLower(s)
+		}
+		if b >= 'A' && b <= 'Z' {
+			buf := make([]byte, len(s))
+			copy(buf, s[:i])
+			buf[i] = b + ('a' - 'A')
+			for j := i + 1; j < len(s); j++ {
+				c := s[j]
+				if c >= utf8RuneSelf {
+					return strings.ToLower(s)
+				}
+				if c >= 'A' && c <= 'Z' {
+					buf[j] = c + ('a' - 'A')
+					continue
+				}
+				buf[j] = c
+			}
+			return string(buf)
+		}
+	}
+	return s
 }

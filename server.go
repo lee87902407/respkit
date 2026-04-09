@@ -11,6 +11,7 @@ import (
 	"time"
 
 	iconn "github.com/lee87902407/respkit/internal/conn"
+	"github.com/lee87902407/respkit/internal/protocol"
 	"github.com/lee87902407/respkit/internal/resp"
 	"github.com/lee87902407/respkit/internal/session"
 )
@@ -288,7 +289,7 @@ func (s *Server) makeHandle(sess *session.Session, conn *iconn.Conn) func() {
 
 				// Factory-based dispatch (alternative).
 				if s.factory != nil {
-					name := strings.ToLower(string(result.Args[0]))
+					name := protocol.NormalizeCommandNameBytes(result.Args[0])
 					if _, err := s.factory.CreateCommand(name, result.Raw, result.Args); err != nil {
 						writer.AppendError(err.Error())
 						bytesToWrite := len(writer.Bytes())
