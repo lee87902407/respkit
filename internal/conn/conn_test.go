@@ -10,12 +10,12 @@ import (
 	"github.com/lee87902407/respkit/internal/protocol"
 )
 
-func TestConnReadValueUsesExternalScopeAndRetainsPipelinedBytes(t *testing.T) {
+func TestConnReadUsesExternalScopeAndRetainsPipelinedBytes(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
 	defer client.Close()
 
-	conn := NewConn(server)
+	conn := NewConn(server, protocol.NewReader(), protocol.NewWriter(64))
 	pool := mempool.New(mempool.DefaultOptions())
 
 	payload := append(
@@ -36,21 +36,21 @@ func TestConnReadValueUsesExternalScopeAndRetainsPipelinedBytes(t *testing.T) {
 	scope1 := mempool.NewScope(pool)
 	defer scope1.Close()
 
-	first, err := conn.ReadValue(scope1)
+	first, err := conn.Read(scope1)
 	if err != nil {
-		t.Fatalf("ReadValue(first) error = %v", err)
+		t.Fatalf("Read(first) error = %v", err)
 	}
 
 	if !first.Equal(protocol.ArrayOf(protocol.BulkFromString("PING"))) {
-		t.Fatalf("ReadValue(first) = %#v", first)
+		t.Fatalf("Read(first) = %#v", first)
 	}
 
 	scope2 := mempool.NewScope(pool)
 	defer scope2.Close()
 
-	second, err := conn.ReadValue(scope2)
+	second, err := conn.Read(scope2)
 	if err != nil {
-		t.Fatalf("ReadValue(second) error = %v", err)
+		t.Fatalf("Read(second) error = %v", err)
 	}
 
 	wantSecond := protocol.ArrayOf(
@@ -59,7 +59,7 @@ func TestConnReadValueUsesExternalScopeAndRetainsPipelinedBytes(t *testing.T) {
 		protocol.BulkFromString("value"),
 	)
 	if !second.Equal(wantSecond) {
-		t.Fatalf("ReadValue(second) = %#v, want %#v", second, wantSecond)
+		t.Fatalf("Read(second) = %#v, want %#v", second, wantSecond)
 	}
 
 	select {
@@ -72,16 +72,12 @@ func TestConnReadValueUsesExternalScopeAndRetainsPipelinedBytes(t *testing.T) {
 	}
 }
 
-func TestConnWriteValueSerializesThroughExternalScope(t *testing.T) {
+func TestConnWriteBuffersUntilFlush(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
 	defer client.Close()
 
-	conn := NewConn(server)
-	pool := mempool.New(mempool.DefaultOptions())
-	scope := mempool.NewScope(pool)
-	defer scope.Close()
-
+	conn := NewConn(server, protocol.NewReader(), protocol.NewWriter(64))
 	value := protocol.ArrayOf(
 		protocol.BulkFromString("SET"),
 		protocol.BulkFromString("key"),
@@ -96,14 +92,17 @@ func TestConnWriteValueSerializesThroughExternalScope(t *testing.T) {
 		readDone <- buf
 	}()
 
-	if err := conn.WriteValue(scope, value); err != nil {
-		t.Fatalf("WriteValue() error = %v", err)
+	if err := conn.Write(value); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
 	}
 
 	select {
 	case got := <-readDone:
 		if !bytes.Equal(got, want) {
-			t.Fatalf("WriteValue() wrote %q, want %q", got, want)
+			t.Fatalf("Flush() wrote %q, want %q", got, want)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for response bytes")

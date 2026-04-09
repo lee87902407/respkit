@@ -3,7 +3,6 @@ package respkit
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	"github.com/lee87902407/respkit/internal/protocol"
 	"github.com/lee87902407/respkit/internal/resp"
 	"github.com/lee87902407/respkit/internal/session"
+	"go.uber.org/zap"
 )
 
 const stopPollInterval = 100 * time.Millisecond
@@ -32,9 +32,10 @@ type commandFactory interface {
 // Server represents a Redis protocol server.
 // It manages listening, session creation, command parsing, and shutdown.
 type Server struct {
-	config  *Config
-	handler commandHandler
-	factory commandFactory
+	config           *Config
+	handler          commandHandler
+	factory          commandFactory
+	sessionAllocator SessionAllocator
 
 	mu        sync.RWMutex
 	listener  net.Listener
@@ -42,9 +43,8 @@ type Server struct {
 	started   bool
 	serveDone chan struct{}
 
-	sessions   sync.Map // uint64 -> *session.Session
-	nextSessID atomic.Uint64
-	done       atomic.Bool
+	sessions sync.Map // uint64 -> *session.Session
+	done     atomic.Bool
 }
 
 // NewServer creates a new server with an optional command handler.
@@ -53,7 +53,10 @@ func NewServer(config *Config, handler ...interface{ Handle(*Context) error }) *
 		config = &Config{}
 	}
 	cfg := defaultConfig(config)
-	s := &Server{config: cfg}
+	s := &Server{
+		config:           cfg,
+		sessionAllocator: cfg.SessionAllocator,
+	}
 	if len(handler) > 0 && handler[0] != nil {
 		s.handler = handler[0]
 	}
@@ -85,6 +88,9 @@ func defaultConfig(config *Config) *Config {
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = blog.L()
+	}
+	if cfg.SessionAllocator == nil {
+		cfg.SessionAllocator = &DefaultSessionAllocator{}
 	}
 	return &cfg
 }
@@ -223,7 +229,9 @@ func (s *Server) serve(ln net.Listener) error {
 			if s.done.Load() || errors.Is(err, net.ErrClosed) {
 				return nil
 			}
-			log.Printf("accept: %v", err)
+			if s.config.Logger != nil {
+				s.config.Logger.Warn("respkit: accept failed", zap.Error(err))
+			}
 			continue
 		}
 
@@ -232,41 +240,50 @@ func (s *Server) serve(ln net.Listener) error {
 			continue
 		}
 
-		conn := iconn.NewConn(netConn)
-		sessID := s.nextSessID.Add(1)
-		sess := session.NewSession(sessID)
+		conn := iconn.NewConn(netConn, nil, nil)
+		sc := &serverConn{
+			conn:         conn,
+			writer:       resp.NewWriter(s.config.WriteBufferSize),
+			writeBufSize: s.config.WriteBufferSize,
+		}
+		allocator := s.sessionAllocator
+		if allocator == nil {
+			allocator = &DefaultSessionAllocator{}
+		}
+		sess := allocator.Allocate(sc)
+		if sess == nil {
+			_ = conn.Close()
+			continue
+		}
+		sc.sess = sess
 		sess.SetCloser(conn)
 		sess.SetOnRemove(func(ss *session.Session) {
 			s.sessions.Delete(ss.ID)
+			allocator.Release(ss)
 		})
 
-		s.sessions.Store(sessID, sess)
-		sess.Start(s.makeHandle(sess, conn))
+		s.sessions.Store(sess.ID, sess)
+		sess.Start(s.makeHandle(sc))
 	}
 }
 
-func (s *Server) makeHandle(sess *session.Session, conn *iconn.Conn) func() {
+func (s *Server) makeHandle(sc *serverConn) func() {
 	return func() {
+		sess := sc.sess
 		buf := make([]byte, s.config.ReadBufferSize)
 		parser := resp.NewParser(nil)
-		writer := resp.NewWriter(s.config.WriteBufferSize)
-		sc := &serverConn{
-			conn:         conn,
-			writer:       writer,
-			sess:         sess,
-			writeBufSize: s.config.WriteBufferSize,
-		}
+		writer := sc.writer
 
 		for {
 			if sess.ShouldStop() {
 				return
 			}
 
-			if err := conn.SetReadDeadline(s.readDeadline()); err != nil {
+			if err := sc.conn.SetReadDeadline(s.readDeadline()); err != nil {
 				return
 			}
 
-			n, err := conn.Read(buf)
+			n, err := sc.conn.Read(buf)
 			if err != nil {
 				if ne, ok := err.(net.Error); ok && ne.Timeout() {
 					if sess.ShouldStop() {
@@ -313,7 +330,7 @@ func (s *Server) makeHandle(sess *session.Session, conn *iconn.Conn) func() {
 					if _, err := s.factory.CreateCommand(name, result.Raw, result.Args); err != nil {
 						writer.AppendError(err.Error())
 						bytesToWrite := len(writer.Bytes())
-						if flushErr := writer.Flush(conn); flushErr != nil {
+						if flushErr := writer.Flush(sc.conn); flushErr != nil {
 							return
 						}
 						sess.AddBytesWritten(uint64(bytesToWrite))

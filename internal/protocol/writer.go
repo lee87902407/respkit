@@ -1,6 +1,8 @@
 package protocol
 
 import (
+	"fmt"
+	"io"
 	"strconv"
 	"strings"
 )
@@ -15,6 +17,12 @@ func NewWriter(initialSize int) *Writer {
 	return &Writer{
 		buf: make([]byte, 0, initialSize),
 	}
+}
+
+// Write appends the RESP encoding of v to the internal buffer.
+func (w *Writer) Write(v RespValue) error {
+	w.Serialize(v)
+	return nil
 }
 
 // Serialize appends the RESP encoding of v to the internal buffer
@@ -37,6 +45,19 @@ func (w *Writer) Reset() {
 // Len returns the current buffer length.
 func (w *Writer) Len() int {
 	return len(w.buf)
+}
+
+// Flush writes the buffered data to dst and clears the buffer.
+func (w *Writer) Flush(dst io.Writer) error {
+	if len(w.buf) == 0 {
+		return nil
+	}
+	_, err := dst.Write(w.buf)
+	w.Reset()
+	if err != nil {
+		return fmt.Errorf("protocol: flush writer: %w", err)
+	}
+	return nil
 }
 
 func (w *Writer) appendValue(b []byte, v RespValue) []byte {

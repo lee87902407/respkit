@@ -2,6 +2,10 @@ package protocol
 
 import (
 	"errors"
+	"fmt"
+	"io"
+
+	"github.com/lee87902407/basekit/mempool"
 )
 
 var (
@@ -10,6 +14,78 @@ var (
 	errInvalidMultiBulkLength = errors.New("invalid multibulk length")
 	errProtocol               = errors.New("protocol error")
 )
+
+const defaultReadBufferSize = 4096
+
+// Reader incrementally reads RESP values from an io.Reader.
+type Reader struct {
+	parser *Parser
+	buf    []byte
+}
+
+// NewReader creates a Reader with an empty parse buffer.
+func NewReader() *Reader {
+	return &Reader{parser: NewParser()}
+}
+
+// Read reads and parses the next RESP value into the provided scope.
+func (r *Reader) Read(src io.Reader, scope *mempool.Scope) (RespValue, error) {
+	if scope == nil {
+		return RespValue{}, fmt.Errorf("protocol: read scope is nil")
+	}
+
+	for {
+		value, consumed, ok := r.parser.ParseOne(r.buf)
+		if ok {
+			value = copyValueIntoScope(scope, value)
+			r.compact(consumed)
+			return value, nil
+		}
+
+		chunk := scope.Get(defaultReadBufferSize)
+		n, err := src.Read(chunk)
+		if n > 0 {
+			r.buf = append(r.buf, chunk[:n]...)
+		}
+		if err != nil {
+			return RespValue{}, err
+		}
+	}
+}
+
+func (r *Reader) compact(consumed int) {
+	if consumed >= len(r.buf) {
+		r.buf = r.buf[:0]
+		return
+	}
+	copy(r.buf, r.buf[consumed:])
+	r.buf = r.buf[:len(r.buf)-consumed]
+}
+
+func copyValueIntoScope(scope *mempool.Scope, value RespValue) RespValue {
+	switch value.Type {
+	case TypeBulkString:
+		if value.Bulk == nil {
+			return value
+		}
+		dup := scope.Get(len(value.Bulk))
+		copy(dup, value.Bulk)
+		value.Bulk = dup[:len(value.Bulk)]
+		return value
+	case TypeArray:
+		if len(value.Array) == 0 {
+			return value
+		}
+		arr := make([]RespValue, len(value.Array))
+		for i := range value.Array {
+			arr[i] = copyValueIntoScope(scope, value.Array[i])
+		}
+		value.Array = arr
+		return value
+	default:
+		return value
+	}
+}
 
 // Parser implements zero-copy RESP parsing.
 // Returned RespValue elements may reference the input buffer;
@@ -44,6 +120,19 @@ func (p *Parser) Parse(buf []byte) ([]RespValue, int) {
 		values = append(values, v)
 	}
 	return values, p.pos
+}
+
+// ParseOne parses the first complete RESP value from buf.
+func (p *Parser) ParseOne(buf []byte) (RespValue, int, bool) {
+	p.buf = buf
+	p.pos = 0
+	p.marks = p.marks[:0]
+
+	value, ok := p.parseNext()
+	if !ok {
+		return RespValue{}, 0, false
+	}
+	return value, p.pos, true
 }
 
 // parseNext parses one RESP value. Returns false if incomplete.
