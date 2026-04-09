@@ -18,6 +18,30 @@ import (
 
 const stopPollInterval = 100 * time.Millisecond
 
+// CommandFactory creates commands from raw parsed data.
+type CommandFactory interface {
+	CreateCommand(name string, raw []byte, args [][]byte) (Command, error)
+}
+
+// CommandFactoryFunc is a function adapter for CommandFactory.
+type CommandFactoryFunc func(name string, raw []byte, args [][]byte) (Command, error)
+
+func (f CommandFactoryFunc) CreateCommand(name string, raw []byte, args [][]byte) (Command, error) {
+	return f(name, raw, args)
+}
+
+// Handler processes a command.
+type Handler interface {
+	Handle(ctx *Context) error
+}
+
+// HandlerFunc is an adapter for functions.
+type HandlerFunc func(ctx *Context) error
+
+func (f HandlerFunc) Handle(ctx *Context) error {
+	return f(ctx)
+}
+
 // Server represents a Redis protocol server.
 // It manages listening, session creation, command parsing, and shutdown.
 type Server struct {
@@ -63,8 +87,17 @@ func defaultConfig(config *Config) *Config {
 	if cfg.WriteBufferSize == 0 {
 		cfg.WriteBufferSize = 4096
 	}
-	if cfg.MaxPipeline == 0 {
-		cfg.MaxPipeline = 1024
+	if cfg.DispatcherWorkers == 0 {
+		cfg.DispatcherWorkers = 1
+	}
+	if cfg.QueueSize == 0 {
+		cfg.QueueSize = 4096
+	}
+	if cfg.MaxInFlightPerSession == 0 {
+		cfg.MaxInFlightPerSession = 1
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = DefaultLogger()
 	}
 	return &cfg
 }

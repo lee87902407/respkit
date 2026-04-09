@@ -7,6 +7,24 @@ import (
 	"time"
 )
 
+func TestDefaultConfigPreservesDispatcherSettings(t *testing.T) {
+	cfg := defaultConfig(&Config{
+		DispatcherWorkers:     3,
+		QueueSize:             128,
+		MaxInFlightPerSession: 9,
+	})
+
+	if cfg.DispatcherWorkers != 3 {
+		t.Fatalf("DispatcherWorkers = %d, want %d", cfg.DispatcherWorkers, 3)
+	}
+	if cfg.QueueSize != 128 {
+		t.Fatalf("QueueSize = %d, want %d", cfg.QueueSize, 128)
+	}
+	if cfg.MaxInFlightPerSession != 9 {
+		t.Fatalf("MaxInFlightPerSession = %d, want %d", cfg.MaxInFlightPerSession, 9)
+	}
+}
+
 func TestServer_StartAndStop(t *testing.T) {
 	server := NewServer(&Config{
 		Addr:    "127.0.0.1:0",

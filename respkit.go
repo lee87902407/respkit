@@ -5,7 +5,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	blog "github.com/lee87902407/basekit/log"
+	"github.com/lee87902407/basekit/mempool"
+	"github.com/lee87902407/respkit/internal/protocol"
 	"github.com/lee87902407/respkit/internal/session"
+	"go.uber.org/zap"
 )
 
 // Config configures the server.
@@ -14,20 +18,24 @@ type Config struct {
 	Addr    string
 	Network string // "tcp", "tcp4", "tcp6", "unix"
 
-	// Performance tuning.
+	// Buffer sizing.
 	ReadBufferSize  int // Default: 16384
 	WriteBufferSize int // Default: 4096
-	MaxPipeline     int // Default: 1024
+
+	// Dispatcher configuration.
+	DispatcherWorkers     int // Default: 1
+	QueueSize             int // Default: 4096
+	MaxInFlightPerSession int // Default: 1
 
 	// Connection management.
-	IdleTimeout    time.Duration
-	MaxConnections int
+	IdleTimeout time.Duration
+
+	// Optional shared dependencies.
+	MemPool mempool.BytePool
+	Logger  *zap.Logger
 
 	// Session configuration.
 	SessionAllocator SessionAllocator
-
-	// CGO options.
-	UseCGOParser bool // Use C parser if available
 }
 
 // Command represents a parsed command with zero-copy argument slices.
@@ -36,28 +44,23 @@ type Command struct {
 	Args [][]byte // Parsed arguments (zero-copy slices into read buffer)
 }
 
-// CommandFactory creates commands from raw parsed data.
-type CommandFactory interface {
-	CreateCommand(name string, raw []byte, args [][]byte) (Command, error)
+// ScopedRequest carries a scope-managed request value for a session.
+type ScopedRequest struct {
+	Session *session.Session
+	Value   protocol.RespValue
+	Scope   *mempool.Scope
 }
 
-// CommandFactoryFunc is a function adapter for CommandFactory.
-type CommandFactoryFunc func(name string, raw []byte, args [][]byte) (Command, error)
-
-func (f CommandFactoryFunc) CreateCommand(name string, raw []byte, args [][]byte) (Command, error) {
-	return f(name, raw, args)
+// ScopedResponse carries a scope-managed response value for a session.
+type ScopedResponse struct {
+	Session *session.Session
+	Value   protocol.RespValue
+	Scope   *mempool.Scope
 }
 
-// Handler processes a command.
-type Handler interface {
-	Handle(ctx *Context) error
-}
-
-// HandlerFunc is an adapter for functions.
-type HandlerFunc func(ctx *Context) error
-
-func (f HandlerFunc) Handle(ctx *Context) error {
-	return f(ctx)
+// DefaultLogger returns the basekit logger when no explicit logger is supplied.
+func DefaultLogger() *zap.Logger {
+	return blog.L()
 }
 
 // Context provides context for command handling.
