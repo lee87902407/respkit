@@ -6,15 +6,26 @@ import (
 	"testing"
 	"time"
 
+	blog "github.com/lee87902407/basekit/log"
+	"github.com/lee87902407/basekit/mempool"
 	"github.com/lee87902407/respkit"
 )
 
 func TestNewServerAcceptsTask1ConfigShape(t *testing.T) {
+	bytePool := mempool.New(mempool.DefaultOptions())
+	logger := blog.L()
+
 	server := respkit.NewServer(&respkit.Config{
 		Addr:                  "127.0.0.1:0",
+		Network:               "tcp",
+		ReadBufferSize:        2048,
+		WriteBufferSize:       1024,
 		DispatcherWorkers:     3,
 		QueueSize:             128,
 		MaxInFlightPerSession: 9,
+		IdleTimeout:           250 * time.Millisecond,
+		MemPool:               bytePool,
+		Logger:                logger,
 	})
 
 	errCh := make(chan error, 1)
@@ -30,7 +41,7 @@ func TestNewServerAcceptsTask1ConfigShape(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if server.Addr() == nil {
-		t.Fatal("server did not start with task 1 config shape")
+		t.Fatal("server did not start with full task 1 config shape")
 	}
 
 	if err := server.Stop(); err != nil {
