@@ -1,47 +1,50 @@
 package protocol
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 func TestRespValueCommandName(t *testing.T) {
 	tests := []struct {
-		name string
+		name  string
 		value RespValue
-		want string
+		want  string
 	}{
 		{
-			name: "bulk string command lowercased",
+			name:  "bulk string command lowercased",
 			value: ArrayOf(BulkBytes([]byte("PING"))),
-			want: "ping",
+			want:  "ping",
 		},
 		{
-			name: "simple string command lowercased",
+			name:  "simple string command lowercased",
 			value: ArrayOf(SimpleString("SET")),
-			want: "set",
+			want:  "set",
 		},
 		{
-			name: "unicode simple string preserved",
+			name:  "unicode simple string preserved",
 			value: ArrayOf(SimpleString("ÄCMD")),
-			want: "äcmd",
+			want:  "äcmd",
 		},
 		{
-			name: "mixed ascii preserved and lowered",
+			name:  "mixed ascii preserved and lowered",
 			value: ArrayOf(BulkBytes([]byte("Config.GET"))),
-			want: "config.get",
+			want:  "config.get",
 		},
 		{
-			name: "empty array returns empty",
+			name:  "empty array returns empty",
 			value: ArrayOf(),
-			want: "",
+			want:  "",
 		},
 		{
-			name: "non array returns empty",
+			name:  "non array returns empty",
 			value: BulkBytes([]byte("PING")),
-			want: "",
+			want:  "",
 		},
 		{
-			name: "non string first arg returns empty",
+			name:  "non string first arg returns empty",
 			value: ArrayOf(Integer(1)),
-			want: "",
+			want:  "",
 		},
 	}
 
@@ -51,6 +54,33 @@ func TestRespValueCommandName(t *testing.T) {
 				t.Fatalf("CommandName() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRespValueParseValue(t *testing.T) {
+	value := ArrayOf(BulkFromString("PING"))
+	buf := append(SerializeValue(value), []byte("tail")...)
+
+	got, consumed, ok := ParseValue(buf)
+	if !ok {
+		t.Fatal("ParseValue() reported incomplete for complete payload")
+	}
+	if !got.Equal(value) {
+		t.Fatalf("ParseValue() value = %#v, want %#v", got, value)
+	}
+	if consumed != len(SerializeValue(value)) {
+		t.Fatalf("ParseValue() consumed = %d, want %d", consumed, len(SerializeValue(value)))
+	}
+}
+
+func TestRespValueAppendSerialized(t *testing.T) {
+	prefix := []byte("prefix")
+	value := ArrayOf(BulkFromString("PING"))
+
+	got := AppendSerialized(append([]byte(nil), prefix...), value)
+	want := append(append([]byte(nil), prefix...), SerializeValue(value)...)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("AppendSerialized() = %q, want %q", got, want)
 	}
 }
 

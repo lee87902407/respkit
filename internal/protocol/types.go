@@ -63,6 +63,27 @@ func ArrayOf(values ...RespValue) RespValue {
 	return RespValue{Type: TypeArray, Array: values}
 }
 
+// ParseValue parses the first complete RESP value from buf.
+// The returned value may reference buf directly.
+func ParseValue(buf []byte) (RespValue, int, bool) {
+	parser := NewParser()
+	parser.buf = buf
+	parser.pos = 0
+	parser.marks = parser.marks[:0]
+
+	value, ok := parser.parseNext()
+	if !ok {
+		return RespValue{}, 0, false
+	}
+	return value, parser.pos, true
+}
+
+// AppendSerialized appends the RESP encoding of v to dst.
+func AppendSerialized(dst []byte, v RespValue) []byte {
+	writer := Writer{buf: dst}
+	return writer.Serialize(v)
+}
+
 // IsNull returns true if this value represents a RESP null.
 func (v RespValue) IsNull() bool {
 	return v.Type == TypeNull || (v.Type == TypeBulkString && v.Bulk == nil)
