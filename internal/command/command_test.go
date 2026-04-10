@@ -17,12 +17,57 @@ func TestBuildCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("returns echo command for echo request", func(t *testing.T) {
+		request := protocol.ArrayOf(
+			protocol.BulkFromString("ECHO"),
+			protocol.BulkFromString("hello"),
+		)
+
+		cmd := BuildCommand(request)
+
+		if _, ok := cmd.(*EchoCommand); !ok {
+			t.Fatalf("BuildCommand() returned %T, want *EchoCommand", cmd)
+		}
+	})
+
 	t.Run("returns unknown command error response", func(t *testing.T) {
 		request := protocol.ArrayOf(protocol.BulkFromString("NOPE"))
 
 		cmd := BuildCommand(request)
 		got := cmd.Execute(&Context{})
 		want := protocol.Error("ERR unknown command 'nope'")
+		if !got.Equal(want) {
+			t.Fatalf("Execute() = %#v, want %#v", got, want)
+		}
+	})
+}
+
+func TestBasicCommandExecute(t *testing.T) {
+	t.Run("ping without args returns PONG", func(t *testing.T) {
+		cmd := &PingCommand{}
+
+		got := cmd.Execute(&Context{})
+		want := protocol.SimpleString("PONG")
+		if !got.Equal(want) {
+			t.Fatalf("Execute() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("ping with message returns bulk string", func(t *testing.T) {
+		cmd := &PingCommand{message: []byte("hello")}
+
+		got := cmd.Execute(&Context{})
+		want := protocol.BulkBytes([]byte("hello"))
+		if !got.Equal(want) {
+			t.Fatalf("Execute() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("echo returns echoed bulk string", func(t *testing.T) {
+		cmd := &EchoCommand{message: []byte("world")}
+
+		got := cmd.Execute(&Context{})
+		want := protocol.BulkBytes([]byte("world"))
 		if !got.Equal(want) {
 			t.Fatalf("Execute() = %#v, want %#v", got, want)
 		}
