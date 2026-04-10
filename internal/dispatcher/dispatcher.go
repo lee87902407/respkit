@@ -1,6 +1,7 @@
 package dispatcher
 
 import (
+	"errors"
 	"sync"
 
 	"github.com/lee87902407/respkit/internal/command"
@@ -22,14 +23,18 @@ type Dispatcher struct {
 	incomingQueue chan *Request
 	readyQueue    chan *Request
 	completeQueue chan *Request
-	waitingQueue  chan *Request
+	waitingQueue  []*Request
+	queueSize     int
 
 	workers int
 
-	done      chan struct{}
-	startOnce sync.Once
-	stopOnce  sync.Once
-	wg        sync.WaitGroup
+	enqueueDone chan struct{}
+	stopped     bool
+	mu          sync.Mutex
+	enqueueWG   sync.WaitGroup
+	startOnce   sync.Once
+	stopOnce    sync.Once
+	wg          sync.WaitGroup
 }
 
 // NewDispatcher creates a new dispatcher.
@@ -46,9 +51,10 @@ func NewDispatcher(registry *command.Registry, workers int, queueSize int) *Disp
 		incomingQueue: make(chan *Request, queueSize),
 		readyQueue:    make(chan *Request, queueSize),
 		completeQueue: make(chan *Request, queueSize),
-		waitingQueue:  make(chan *Request, queueSize),
+		waitingQueue:  make([]*Request, 0, queueSize),
+		queueSize:     queueSize,
 		workers:       workers,
-		done:          make(chan struct{}),
+		enqueueDone:   make(chan struct{}),
 	}
 }
 
@@ -65,10 +71,15 @@ func (d *Dispatcher) Start() {
 	})
 }
 
-// Stop stops the scheduler and workers.
+// Stop stops the scheduler and workers after draining accepted work.
 func (d *Dispatcher) Stop() {
 	d.stopOnce.Do(func() {
-		close(d.done)
+		d.mu.Lock()
+		d.stopped = true
+		d.mu.Unlock()
+		close(d.enqueueDone)
+		d.enqueueWG.Wait()
+		close(d.incomingQueue)
 		d.wg.Wait()
 	})
 }
@@ -76,22 +87,38 @@ func (d *Dispatcher) Stop() {
 // Enqueue adds a request to the scheduler's incoming queue.
 // Blocks if the queue is full to provide natural backpressure.
 func (d *Dispatcher) Enqueue(req *Request) error {
-	select {
-	case <-d.done:
-		return ErrDispatcherStopped
-	default:
+	if req == nil {
+		return ErrInvalidRequest
 	}
+	if req.Result == nil || cap(req.Result) == 0 || len(req.Result) != 0 {
+		return ErrResultUnavailable
+	}
+
+	d.mu.Lock()
+	if d.stopped {
+		d.mu.Unlock()
+		return ErrDispatcherStopped
+	}
+	d.enqueueWG.Add(1)
+	d.mu.Unlock()
+	defer d.enqueueWG.Done()
 
 	select {
 	case d.incomingQueue <- req:
 		return nil
-	case <-d.done:
+	case <-d.enqueueDone:
 		return ErrDispatcherStopped
 	}
 }
 
 // ErrDispatcherStopped is returned when enqueueing on a stopped dispatcher.
 var ErrDispatcherStopped = dispatcherError("dispatcher stopped")
+
+// ErrResultUnavailable reports a request result channel that cannot safely receive.
+var ErrResultUnavailable = errors.New("dispatcher result channel unavailable")
+
+// ErrInvalidRequest reports an invalid nil request.
+var ErrInvalidRequest = errors.New("dispatcher request is nil")
 
 type dispatcherError string
 
@@ -100,21 +127,50 @@ func (e dispatcherError) Error() string { return string(e) }
 func (d *Dispatcher) schedulerLoop() {
 	defer d.wg.Done()
 
+	pendingWorkers := 0
+	incomingQueue := d.incomingQueue
+
 	for {
-		select {
-		case <-d.done:
+		if incomingQueue == nil && pendingWorkers == 0 && len(d.waitingQueue) == 0 {
+			close(d.readyQueue)
 			return
-		case req := <-d.incomingQueue:
+		}
+
+		var (
+			acceptIn <-chan *Request
+			readyOut chan *Request
+			nextReq  *Request
+		)
+
+		if incomingQueue != nil && len(d.waitingQueue) < d.queueSize {
+			acceptIn = incomingQueue
+		}
+		if len(d.waitingQueue) > 0 {
+			readyOut = d.readyQueue
+			nextReq = d.waitingQueue[0]
+		}
+
+		select {
+		case req, ok := <-acceptIn:
+			if !ok {
+				incomingQueue = nil
+				continue
+			}
 			if req == nil {
 				continue
 			}
+			pendingWorkers++
 			select {
 			case d.readyQueue <- req:
-			case <-d.done:
-				return
+			default:
+				d.waitingQueue = append(d.waitingQueue, req)
 			}
-		case <-d.completeQueue:
-			// Completion handling will promote waiting requests in later stages.
+		case readyOut <- nextReq:
+			d.waitingQueue = d.waitingQueue[1:]
+		case req := <-d.completeQueue:
+			if req != nil && pendingWorkers > 0 {
+				pendingWorkers--
+			}
 		}
 	}
 }
@@ -122,22 +178,12 @@ func (d *Dispatcher) schedulerLoop() {
 func (d *Dispatcher) workerLoop() {
 	defer d.wg.Done()
 
-	for {
-		select {
-		case <-d.done:
-			return
-		case req := <-d.readyQueue:
-			if req == nil {
-				continue
-			}
-			d.processRequest(req)
-			select {
-			case d.completeQueue <- req:
-			case <-d.done:
-				return
-			default:
-			}
+	for req := range d.readyQueue {
+		if req == nil {
+			continue
 		}
+		d.processRequest(req)
+		d.completeQueue <- req
 	}
 }
 
@@ -150,16 +196,20 @@ func (d *Dispatcher) processRequest(req *Request) {
 
 	factory := d.registry.Lookup(req.Name)
 	if factory == nil {
-		req.Result <- command.NotFoundError(req.Name)
+		d.deliverResult(req, command.NotFoundError(req.Name))
 		return
 	}
 
 	cmd, err := factory(req.Name, req.Args)
 	if err != nil {
-		req.Result <- protocol.Error("ERR " + err.Error())
+		d.deliverResult(req, protocol.Error("ERR "+err.Error()))
 		return
 	}
 
 	result := cmd.Execute(ctx)
+	d.deliverResult(req, result)
+}
+
+func (d *Dispatcher) deliverResult(req *Request, result protocol.RespValue) {
 	req.Result <- result
 }
