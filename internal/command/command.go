@@ -9,21 +9,28 @@ func BuildCommand(request protocol.RespValue) Command {
 
 	switch name {
 	case "ping":
-		return &PingCommand{message: pingMessage(args)}
+		return buildPingCommand(args)
 	case "echo":
-		return &EchoCommand{message: firstArg(args)}
+		return buildEchoCommand(args)
 	default:
 		return &UnknownCommand{name: name}
 	}
 }
 
-func firstArg(args [][]byte) []byte {
-	if len(args) == 0 {
-		return nil
+func buildPingCommand(args [][]byte) Command {
+	switch len(args) {
+	case 0:
+		return &PingCommand{}
+	case 1:
+		return &PingCommand{message: args[0], hasMessage: true}
+	default:
+		return &InvalidArgsCommand{name: "ping"}
 	}
-	return args[0]
 }
 
-func pingMessage(args [][]byte) []byte {
-	return firstArg(args)
+func buildEchoCommand(args [][]byte) Command {
+	if len(args) != 1 {
+		return &InvalidArgsCommand{name: "echo"}
+	}
+	return &EchoCommand{message: args[0]}
 }

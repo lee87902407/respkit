@@ -30,6 +30,44 @@ func TestBuildCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("ping with too many args returns invalid args error", func(t *testing.T) {
+		request := protocol.ArrayOf(
+			protocol.BulkFromString("PING"),
+			protocol.BulkFromString("one"),
+			protocol.BulkFromString("two"),
+		)
+
+		got := BuildCommand(request).Execute(&Context{})
+		want := protocol.Error("ERR wrong number of arguments for 'ping' command")
+		if !got.Equal(want) {
+			t.Fatalf("Execute() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("echo with no args returns invalid args error", func(t *testing.T) {
+		request := protocol.ArrayOf(protocol.BulkFromString("ECHO"))
+
+		got := BuildCommand(request).Execute(&Context{})
+		want := protocol.Error("ERR wrong number of arguments for 'echo' command")
+		if !got.Equal(want) {
+			t.Fatalf("Execute() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("echo with extra args returns invalid args error", func(t *testing.T) {
+		request := protocol.ArrayOf(
+			protocol.BulkFromString("ECHO"),
+			protocol.BulkFromString("one"),
+			protocol.BulkFromString("two"),
+		)
+
+		got := BuildCommand(request).Execute(&Context{})
+		want := protocol.Error("ERR wrong number of arguments for 'echo' command")
+		if !got.Equal(want) {
+			t.Fatalf("Execute() = %#v, want %#v", got, want)
+		}
+	})
+
 	t.Run("returns unknown command error response", func(t *testing.T) {
 		request := protocol.ArrayOf(protocol.BulkFromString("NOPE"))
 
@@ -54,10 +92,20 @@ func TestBasicCommandExecute(t *testing.T) {
 	})
 
 	t.Run("ping with message returns bulk string", func(t *testing.T) {
-		cmd := &PingCommand{message: []byte("hello")}
+		cmd := &PingCommand{message: []byte("hello"), hasMessage: true}
 
 		got := cmd.Execute(&Context{})
 		want := protocol.BulkBytes([]byte("hello"))
+		if !got.Equal(want) {
+			t.Fatalf("Execute() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("ping with empty bulk string returns empty bulk string", func(t *testing.T) {
+		cmd := &PingCommand{message: []byte{}, hasMessage: true}
+
+		got := cmd.Execute(&Context{})
+		want := protocol.BulkBytes([]byte{})
 		if !got.Equal(want) {
 			t.Fatalf("Execute() = %#v, want %#v", got, want)
 		}
@@ -68,6 +116,16 @@ func TestBasicCommandExecute(t *testing.T) {
 
 		got := cmd.Execute(&Context{})
 		want := protocol.BulkBytes([]byte("world"))
+		if !got.Equal(want) {
+			t.Fatalf("Execute() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("invalid args command returns wrong-number error", func(t *testing.T) {
+		cmd := &InvalidArgsCommand{name: "echo"}
+
+		got := cmd.Execute(&Context{})
+		want := protocol.Error("ERR wrong number of arguments for 'echo' command")
 		if !got.Equal(want) {
 			t.Fatalf("Execute() = %#v, want %#v", got, want)
 		}

@@ -4,12 +4,13 @@ import "github.com/lee87902407/respkit/internal/protocol"
 
 // PingCommand implements the RESP PING command.
 type PingCommand struct {
-	message []byte
+	message    []byte
+	hasMessage bool
 }
 
 // Execute returns PONG or the provided message.
 func (c *PingCommand) Execute(ctx *Context) protocol.RespValue {
-	if len(c.message) == 0 {
+	if !c.hasMessage {
 		return protocol.SimpleString("PONG")
 	}
 	return protocol.BulkBytes(c.message)
@@ -23,6 +24,16 @@ type EchoCommand struct {
 // Execute echoes the provided message.
 func (c *EchoCommand) Execute(ctx *Context) protocol.RespValue {
 	return protocol.BulkBytes(c.message)
+}
+
+// InvalidArgsCommand returns a standard wrong-number-of-arguments error.
+type InvalidArgsCommand struct {
+	name string
+}
+
+// Execute returns the invalid-arity error response.
+func (c *InvalidArgsCommand) Execute(ctx *Context) protocol.RespValue {
+	return protocol.Error("ERR wrong number of arguments for '" + c.name + "' command")
 }
 
 // UnknownCommand returns the standard Redis unknown-command error.
