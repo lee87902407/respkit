@@ -20,6 +20,11 @@ type queuedResponse struct {
 	scope any
 }
 
+type responseWriter interface {
+	Write(protocol.RespValue) error
+	Flush() error
+}
+
 // Session holds per-connection state and is the primary lifecycle object.
 type Session struct {
 	mu sync.RWMutex
@@ -156,6 +161,69 @@ func (s *Session) HandleResponse(value protocol.RespValue, scope any) error {
 		return nil
 	case <-s.stopCh:
 		return ErrSessionStopped
+	}
+}
+
+func (s *Session) writeLoop(writer responseWriter) {
+	if writer == nil {
+		return
+	}
+
+	batch := make([]queuedResponse, 0, defaultResponseQueueSize)
+	for {
+		select {
+		case <-s.stopCh:
+			if len(s.responses) == 0 {
+				return
+			}
+		default:
+		}
+
+		var first queuedResponse
+		select {
+		case first = <-s.responses:
+		case <-s.stopCh:
+			if len(s.responses) == 0 {
+				return
+			}
+			first = <-s.responses
+		}
+
+		batch = append(batch[:0], first)
+		if err := writer.Write(first.value); err != nil {
+			s.releaseBatch(batch)
+			return
+		}
+
+		for len(s.responses) > 0 {
+			next := <-s.responses
+			batch = append(batch, next)
+			if err := writer.Write(next.value); err != nil {
+				s.releaseBatch(batch)
+				return
+			}
+		}
+
+		if err := writer.Flush(); err != nil {
+			s.releaseBatch(batch)
+			return
+		}
+		s.releaseBatch(batch)
+	}
+}
+
+func (s *Session) releaseBatch(batch []queuedResponse) {
+	for _, resp := range batch {
+		releaseScope(resp.scope)
+	}
+}
+
+func releaseScope(scope any) {
+	switch v := scope.(type) {
+	case interface{ Close() }:
+		v.Close()
+	case interface{ Close() error }:
+		_ = v.Close()
 	}
 }
 

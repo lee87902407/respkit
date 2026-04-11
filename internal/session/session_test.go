@@ -233,6 +233,49 @@ func TestSessionHandleResponseRejectsStoppedSession(t *testing.T) {
 	}
 }
 
+func TestSessionWriteLoopFlushesBatchAndReleasesScopes(t *testing.T) {
+	sess := NewSession(1)
+	writer := &mockResponseWriter{}
+	scope1 := &mockScope{}
+	scope2 := &mockScope{}
+	done := make(chan struct{})
+
+	if err := sess.HandleResponse(protocol.SimpleString("ONE"), scope1); err != nil {
+		t.Fatalf("HandleResponse(ONE) error = %v", err)
+	}
+	if err := sess.HandleResponse(protocol.SimpleString("TWO"), scope2); err != nil {
+		t.Fatalf("HandleResponse(TWO) error = %v", err)
+	}
+
+	go func() {
+		defer close(done)
+		sess.writeLoop(writer)
+	}()
+
+	select {
+	case <-time.After(time.Second):
+		t.Fatal("writeLoop did not drain queued responses in time")
+	case <-waitForCondition(func() bool { return writer.flushes == 1 && scope1.closed && scope2.closed }):
+	}
+
+	sess.StopGracefully()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("writeLoop did not exit after graceful stop")
+	}
+
+	if len(writer.values) != 2 {
+		t.Fatalf("write count = %d, want 2", len(writer.values))
+	}
+	if writer.flushes != 1 {
+		t.Fatalf("flush count = %d, want 1", writer.flushes)
+	}
+	if !scope1.closed || !scope2.closed {
+		t.Fatal("scopes should be released after flush")
+	}
+}
+
 func TestSessionShouldStop(t *testing.T) {
 	sess := NewSession(1)
 	if sess.ShouldStop() {
@@ -270,4 +313,41 @@ type mockCloser struct {
 func (m *mockCloser) Close() error {
 	m.closed = true
 	return nil
+}
+
+type mockScope struct {
+	closed bool
+}
+
+func (m *mockScope) Close() {
+	m.closed = true
+}
+
+type mockResponseWriter struct {
+	values  []protocol.RespValue
+	flushes int
+}
+
+func (m *mockResponseWriter) Write(value protocol.RespValue) error {
+	m.values = append(m.values, value)
+	return nil
+}
+
+func (m *mockResponseWriter) Flush() error {
+	m.flushes++
+	return nil
+}
+
+func waitForCondition(cond func() bool) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			if cond() {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	return done
 }
