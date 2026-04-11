@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/lee87902407/basekit/mempool"
+	"github.com/lee87902407/respkit/internal/command"
+	"github.com/lee87902407/respkit/internal/dispatcher"
 	"github.com/lee87902407/respkit/internal/protocol"
 )
 
@@ -403,6 +405,78 @@ func TestSessionReadLoopHonorsInflightLimit(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("readLoop did not exit after processing queued reads")
+	}
+}
+
+func TestSessionUseDispatcherQueuesResult(t *testing.T) {
+	registry := command.NewRegistry()
+	registry.Register("ping", command.FuncFactory(func(ctx *command.Context) protocol.RespValue {
+		return protocol.SimpleString("PONG")
+	}))
+
+	d := dispatcher.NewDispatcher(registry, 1, 4)
+	d.Start()
+	defer d.Stop()
+
+	sess := NewSession(42)
+	sess.UseDispatcher(d)
+	sess.inflight.Store(1)
+
+	pool := mempool.New(mempool.DefaultOptions())
+	scope := mempool.NewScope(pool)
+
+	if err := sess.submitRequest(protocol.ArrayOf(protocol.BulkFromString("PING")), scope); err != nil {
+		t.Fatalf("submitRequest() error = %v", err)
+	}
+
+	select {
+	case queued := <-sess.responses:
+		want := protocol.SimpleString("PONG")
+		if !queued.value.Equal(want) {
+			t.Fatalf("queued response = %#v, want %#v", queued.value, want)
+		}
+		if queued.scope != scope {
+			t.Fatal("queued scope did not round-trip through dispatcher")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("dispatcher result was not queued back into session")
+	}
+}
+
+func TestSessionUseDispatcherCopiesArgs(t *testing.T) {
+	registry := command.NewRegistry()
+	registry.Register("echo", command.FuncFactory(func(ctx *command.Context) protocol.RespValue {
+		// Delay a little to make post-submit mutation observable if args are not copied.
+		time.Sleep(20 * time.Millisecond)
+		return protocol.BulkBytes(ctx.Args[0])
+	}))
+
+	d := dispatcher.NewDispatcher(registry, 1, 4)
+	d.Start()
+	defer d.Stop()
+
+	sess := NewSession(7)
+	sess.UseDispatcher(d)
+	sess.inflight.Store(1)
+
+	pool := mempool.New(mempool.DefaultOptions())
+	scope := mempool.NewScope(pool)
+	msg := []byte("hello")
+	value := protocol.ArrayOf(protocol.BulkFromString("ECHO"), protocol.BulkBytes(msg))
+
+	if err := sess.submitRequest(value, scope); err != nil {
+		t.Fatalf("submitRequest() error = %v", err)
+	}
+	msg[0] = 'j'
+
+	select {
+	case queued := <-sess.responses:
+		want := protocol.BulkFromString("hello")
+		if !queued.value.Equal(want) {
+			t.Fatalf("queued response = %#v, want %#v", queued.value, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("dispatcher echo response was not queued back into session")
 	}
 }
 

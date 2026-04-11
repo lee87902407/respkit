@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lee87902407/basekit/mempool"
+	"github.com/lee87902407/respkit/internal/dispatcher"
 	"github.com/lee87902407/respkit/internal/protocol"
 )
 
@@ -128,6 +129,39 @@ func (s *Session) SetRequestSubmitter(fn func(protocol.RespValue, *mempool.Scope
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.submitRequest = fn
+}
+
+// UseDispatcher binds the session request submit path to a dispatcher instance.
+func (s *Session) UseDispatcher(d *dispatcher.Dispatcher) {
+	if d == nil {
+		s.SetRequestSubmitter(nil)
+		return
+	}
+
+	s.SetRequestSubmitter(func(value protocol.RespValue, scope *mempool.Scope) error {
+		resultCh := make(chan protocol.RespValue, 1)
+		request := &dispatcher.Request{
+			SessionID: s.ID,
+			Name:      value.CommandName(),
+			Args:      copyCommandArgs(value.CommandArgs()),
+			Result:    resultCh,
+		}
+		if err := d.Enqueue(request); err != nil {
+			return err
+		}
+
+		go func(scope *mempool.Scope) {
+			result, ok := <-resultCh
+			if !ok {
+				s.decrementInflight()
+				return
+			}
+			_ = s.HandleResponse(result, scope)
+			s.decrementInflight()
+		}(scope)
+
+		return nil
+	})
 }
 
 // Start runs the given handle function in a goroutine.
@@ -300,6 +334,22 @@ func releaseScope(scope any) {
 	}
 }
 
+func copyCommandArgs(args [][]byte) [][]byte {
+	if len(args) == 0 {
+		return nil
+	}
+	copied := make([][]byte, len(args))
+	for i, arg := range args {
+		if arg == nil {
+			continue
+		}
+		dup := make([]byte, len(arg))
+		copy(dup, arg)
+		copied[i] = dup
+	}
+	return copied
+}
+
 func (s *Session) waitForInflightSlot() bool {
 	for {
 		if s.ShouldStop() {
@@ -320,6 +370,18 @@ func (s *Session) getReadDependencies() (requestReader, requestSubmitter, scopeF
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.readRequest, s.submitRequest, s.newScope
+}
+
+func (s *Session) decrementInflight() {
+	for {
+		current := s.inflight.Load()
+		if current <= 0 {
+			return
+		}
+		if s.inflight.CompareAndSwap(current, current-1) {
+			return
+		}
+	}
 }
 
 var netErrClosed = errors.New("use of closed network connection")
