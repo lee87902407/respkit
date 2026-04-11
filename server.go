@@ -2,9 +2,7 @@ package respkit
 
 import (
 	"errors"
-	"fmt"
 	"net"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,29 +13,16 @@ import (
 	iconn "github.com/lee87902407/respkit/internal/conn"
 	idispatcher "github.com/lee87902407/respkit/internal/dispatcher"
 	"github.com/lee87902407/respkit/internal/protocol"
-	"github.com/lee87902407/respkit/internal/resp"
 	"github.com/lee87902407/respkit/internal/session"
 	"go.uber.org/zap"
 )
 
 const stopPollInterval = 100 * time.Millisecond
 
-// commandHandler processes a command.
-type commandHandler interface {
-	Handle(ctx *Context) error
-}
-
-// commandFactory creates commands from raw parsed data.
-type commandFactory interface {
-	CreateCommand(name string, raw []byte, args [][]byte) (Command, error)
-}
-
 // Server represents a Redis protocol server.
-// It manages listening, session creation, command parsing, and shutdown.
+// It manages listening, session creation, dispatcher wiring, and shutdown.
 type Server struct {
 	config           *Config
-	handler          commandHandler
-	factory          commandFactory
 	sessionAllocator SessionAllocator
 	dispatcher       *idispatcher.Dispatcher
 
@@ -51,20 +36,16 @@ type Server struct {
 	done     atomic.Bool
 }
 
-// NewServer creates a new server with an optional command handler.
-func NewServer(config *Config, handler ...interface{ Handle(*Context) error }) *Server {
+// NewServer creates a new server using the default session runtime path.
+func NewServer(config *Config) *Server {
 	if config == nil {
 		config = &Config{}
 	}
 	cfg := defaultConfig(config)
-	s := &Server{
+	return &Server{
 		config:           cfg,
 		sessionAllocator: cfg.SessionAllocator,
 	}
-	if len(handler) > 0 && handler[0] != nil {
-		s.handler = handler[0]
-	}
-	return s
 }
 
 func defaultConfig(config *Config) *Config {
@@ -99,13 +80,6 @@ func defaultConfig(config *Config) *Config {
 	return &cfg
 }
 
-// Register sets the command factory for the server.
-func (s *Server) Register(factory interface {
-	CreateCommand(name string, raw []byte, args [][]byte) (Command, error)
-}) {
-	s.factory = factory
-}
-
 // Addr returns the bound listener address after the server has started.
 func (s *Server) Addr() net.Addr {
 	s.mu.RLock()
@@ -117,13 +91,11 @@ func (s *Server) Addr() net.Addr {
 }
 
 // ListenAndServe starts the server and blocks until shutdown.
-// It is an alias for Start().
 func (s *Server) ListenAndServe() error {
 	return s.Start()
 }
 
 // Shutdown gracefully shuts down the server.
-// It is an alias for Stop().
 func (s *Server) Shutdown() error {
 	return s.Stop()
 }
@@ -142,30 +114,28 @@ func (s *Server) Start() error {
 		return err
 	}
 
+	registry := icommand.NewRegistry()
+	icommand.RegisterBuiltins(registry)
+	dispatcher := idispatcher.NewDispatcher(registry, s.config.DispatcherWorkers, s.config.QueueSize)
+	dispatcher.Start()
+
 	serveDone := make(chan struct{})
 	s.listener = ln
+	s.dispatcher = dispatcher
 	s.serveDone = serveDone
 	s.serveErr = nil
 	s.started = true
 	s.done.Store(false)
 	s.mu.Unlock()
 
-	if s.handler == nil && s.factory == nil {
-		registry := icommand.NewRegistry()
-		icommand.RegisterBuiltins(registry)
-		s.dispatcher = idispatcher.NewDispatcher(registry, s.config.DispatcherWorkers, s.config.QueueSize)
-		s.dispatcher.Start()
-		defer func() {
-			s.dispatcher.Stop()
-			s.dispatcher = nil
-		}()
-	}
-
 	err = s.serve(ln)
+
+	dispatcher.Stop()
 
 	s.mu.Lock()
 	s.serveErr = err
 	s.listener = nil
+	s.dispatcher = nil
 	s.serveDone = nil
 	s.started = false
 	s.mu.Unlock()
@@ -174,13 +144,12 @@ func (s *Server) Start() error {
 	return err
 }
 
-// Stop gracefully stops the server. It stops accepting new connections
-// and signals all active sessions to exit through their normal read loop.
+// Stop gracefully stops the server.
 func (s *Server) Stop() error {
 	return s.shutdown(false)
 }
 
-// Close forcefully stops the server. It immediately closes all sessions.
+// Close forcefully stops the server.
 func (s *Server) Close() error {
 	return s.shutdown(true)
 }
@@ -203,7 +172,7 @@ func (s *Server) shutdown(force bool) error {
 		_ = listener.Close()
 	}
 
-	s.sessions.Range(func(_, value interface{}) bool {
+	s.sessions.Range(func(_, value any) bool {
 		sess, ok := value.(*session.Session)
 		if !ok {
 			return true
@@ -228,7 +197,7 @@ func (s *Server) shutdown(force bool) error {
 // ActiveSessions returns the number of active sessions.
 func (s *Server) ActiveSessions() int {
 	count := 0
-	s.sessions.Range(func(_, _ interface{}) bool {
+	s.sessions.Range(func(_, _ any) bool {
 		count++
 		return true
 	})
@@ -256,36 +225,9 @@ func (s *Server) serve(ln net.Listener) error {
 		}
 
 		conn := iconn.NewConn(netConn, nil, nil)
-		if s.handler == nil && s.factory == nil {
-			if !s.serveDefaultRuntime(conn) {
-				_ = conn.Close()
-			}
-			continue
-		}
-
-		sc := &serverConn{
-			conn:         conn,
-			writer:       resp.NewWriter(s.config.WriteBufferSize),
-			writeBufSize: s.config.WriteBufferSize,
-		}
-		allocator := s.sessionAllocator
-		if allocator == nil {
-			allocator = &DefaultSessionAllocator{}
-		}
-		sess := allocator.Allocate(sc)
-		if sess == nil {
+		if !s.serveDefaultRuntime(conn) {
 			_ = conn.Close()
-			continue
 		}
-		sc.sess = sess
-		sess.SetCloser(conn)
-		sess.SetOnRemove(func(ss *session.Session) {
-			s.sessions.Delete(ss.ID)
-			allocator.Release(ss)
-		})
-
-		s.sessions.Store(sess.ID, sess)
-		sess.Start(s.makeHandle(sc))
 	}
 }
 
@@ -295,7 +237,7 @@ func (s *Server) serveDefaultRuntime(conn *iconn.Conn) bool {
 		allocator = &DefaultSessionAllocator{}
 	}
 
-	placeholder := &serverConn{conn: conn, writer: resp.NewWriter(s.config.WriteBufferSize), writeBufSize: s.config.WriteBufferSize}
+	placeholder := &runtimeConn{conn: conn}
 	sess := allocator.Allocate(placeholder)
 	if sess == nil {
 		return false
@@ -324,85 +266,14 @@ func (s *Server) serveDefaultRuntime(conn *iconn.Conn) bool {
 		}
 		return value, err
 	})
+	if s.config.MaxInFlightPerSession > 0 {
+		sess.SetMaxInFlight(int32(s.config.MaxInFlightPerSession))
+	}
 	sess.UseDispatcher(s.dispatcher)
 
 	s.sessions.Store(sess.ID, sess)
 	sess.StartLoops(&sessionConnWriter{conn: conn, sess: sess})
 	return true
-}
-
-func (s *Server) makeHandle(sc *serverConn) func() {
-	return func() {
-		sess := sc.sess
-		buf := make([]byte, s.config.ReadBufferSize)
-		parser := resp.NewParser(nil)
-		writer := sc.writer
-
-		for {
-			if sess.ShouldStop() {
-				return
-			}
-
-			if err := sc.conn.SetReadDeadline(s.readDeadline()); err != nil {
-				return
-			}
-
-			n, err := sc.conn.RawRead(buf)
-			if err != nil {
-				if ne, ok := err.(net.Error); ok && ne.Timeout() {
-					if sess.ShouldStop() {
-						return
-					}
-					continue
-				}
-				return
-			}
-			if n == 0 {
-				continue
-			}
-
-			sess.UpdateLastSeen()
-			sess.AddBytesRead(uint64(n))
-			parser.Reset(buf[:n])
-
-			for {
-				result := parser.ParseNextCommand()
-				if !result.Complete {
-					break
-				}
-				if len(result.Args) == 0 {
-					continue
-				}
-
-				sess.IncrementCommands()
-
-				if s.handler != nil {
-					ctx := &Context{
-						Conn:    sc,
-						Command: Command{Raw: result.Raw, Args: result.Args},
-						Session: sess,
-					}
-					if err := s.handler.Handle(ctx); err != nil {
-						sc.WriteError(err.Error())
-					}
-					_ = sc.Flush()
-					continue
-				}
-
-				if s.factory != nil {
-					name := protocol.NormalizeCommandNameBytes(result.Args[0])
-					if _, err := s.factory.CreateCommand(name, result.Raw, result.Args); err != nil {
-						writer.AppendError(err.Error())
-						bytesToWrite := len(writer.Bytes())
-						if flushErr := writer.Flush(sc.conn.NetConn()); flushErr != nil {
-							return
-						}
-						sess.AddBytesWritten(uint64(bytesToWrite))
-					}
-				}
-			}
-		}
-	}
 }
 
 func (s *Server) readDeadline() time.Time {
@@ -437,186 +308,22 @@ func (w *sessionConnWriter) Flush() error {
 	return nil
 }
 
-// serverConn adapts internal conn.Conn to the public Conn interface.
-type serverConn struct {
-	conn         *iconn.Conn
-	writer       *resp.Writer
-	sess         *session.Session
-	writeBufSize int
-	mu           sync.Mutex
+// runtimeConn is the lightweight adapter kept for SessionAllocator compatibility.
+type runtimeConn struct {
+	conn *iconn.Conn
+	sess *session.Session
 }
 
-func (c *serverConn) Session() *session.Session { return c.sess }
-func (c *serverConn) SetData(v interface{})     { c.sess.SetData(v) }
-
-func (c *serverConn) WriteString(s string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.writer.AppendString(s)
-	return nil
-}
-
-func (c *serverConn) WriteBulk(b []byte) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.writer.AppendBulk(b)
-	return nil
-}
-
-func (c *serverConn) WriteInt(n int64) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.writer.AppendInt(n)
-	return nil
-}
-
-func (c *serverConn) WriteArray(n int) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.writer.AppendArray(n)
-	return nil
-}
-
-func (c *serverConn) WriteNull() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.writer.AppendNull()
-	return nil
-}
-
-func (c *serverConn) WriteAny(v interface{}) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.writer.AppendAny(v)
-	return nil
-}
-
-func (c *serverConn) WriteError(msg string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if msg == "" {
-		msg = "ERR"
-	}
-	if !strings.HasPrefix(strings.ToUpper(msg), "ERR") {
-		msg = fmt.Sprintf("ERR %s", msg)
-	}
-	c.writer.AppendError(msg)
-	return nil
-}
-
-func (c *serverConn) Flush() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.flushLocked()
-}
-
-func (c *serverConn) flushLocked() error {
-	n := len(c.writer.Bytes())
-	if n == 0 {
-		return nil
-	}
-	if err := c.writer.Flush(c.conn.NetConn()); err != nil {
-		return err
-	}
-	c.sess.AddBytesWritten(uint64(n))
-	return nil
-}
-
-func (c *serverConn) Close() error         { return c.conn.Close() }
-func (c *serverConn) RemoteAddr() net.Addr { return c.conn.RemoteAddr() }
-
-func (c *serverConn) Detach() DetachedConn {
-	return &detachedConn{
-		conn:   c.conn,
-		writer: resp.NewWriter(c.writeBufSize),
-		sess:   c.sess,
-	}
-}
-
-// detachedConn wraps an internal connection for use after handler exit.
-type detachedConn struct {
-	conn   *iconn.Conn
-	writer *resp.Writer
-	sess   *session.Session
-	mu     sync.Mutex
-}
-
-func (d *detachedConn) Session() *session.Session { return d.sess }
-func (d *detachedConn) SetData(v interface{})     { d.sess.SetData(v) }
-
-func (d *detachedConn) WriteString(s string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.writer.AppendString(s)
-	return nil
-}
-
-func (d *detachedConn) WriteBulk(b []byte) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.writer.AppendBulk(b)
-	return nil
-}
-
-func (d *detachedConn) WriteInt(n int64) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.writer.AppendInt(n)
-	return nil
-}
-
-func (d *detachedConn) WriteArray(n int) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.writer.AppendArray(n)
-	return nil
-}
-
-func (d *detachedConn) WriteNull() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.writer.AppendNull()
-	return nil
-}
-
-func (d *detachedConn) WriteAny(v interface{}) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.writer.AppendAny(v)
-	return nil
-}
-
-func (d *detachedConn) WriteError(msg string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if msg == "" {
-		msg = "ERR"
-	}
-	if !strings.HasPrefix(strings.ToUpper(msg), "ERR") {
-		msg = fmt.Sprintf("ERR %s", msg)
-	}
-	d.writer.AppendError(msg)
-	return nil
-}
-
-func (d *detachedConn) Flush() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.flushLocked()
-}
-
-func (d *detachedConn) flushLocked() error {
-	n := len(d.writer.Bytes())
-	if n == 0 {
-		return nil
-	}
-	if err := d.writer.Flush(d.conn.NetConn()); err != nil {
-		return err
-	}
-	d.sess.AddBytesWritten(uint64(n))
-	return nil
-}
-
-func (d *detachedConn) Close() error         { return d.conn.Close() }
-func (d *detachedConn) RemoteAddr() net.Addr { return d.conn.RemoteAddr() }
-func (d *detachedConn) Detach() DetachedConn { return d }
+func (c *runtimeConn) Session() *session.Session  { return c.sess }
+func (c *runtimeConn) SetData(v interface{})      { c.sess.SetData(v) }
+func (c *runtimeConn) WriteString(string) error   { return nil }
+func (c *runtimeConn) WriteBulk([]byte) error     { return nil }
+func (c *runtimeConn) WriteInt(int64) error       { return nil }
+func (c *runtimeConn) WriteArray(int) error       { return nil }
+func (c *runtimeConn) WriteNull() error           { return nil }
+func (c *runtimeConn) WriteError(string) error    { return nil }
+func (c *runtimeConn) WriteAny(interface{}) error { return nil }
+func (c *runtimeConn) Flush() error               { return nil }
+func (c *runtimeConn) Close() error               { return c.conn.Close() }
+func (c *runtimeConn) RemoteAddr() net.Addr       { return c.conn.RemoteAddr() }
+func (c *runtimeConn) Detach() DetachedConn       { return c }

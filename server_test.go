@@ -185,15 +185,10 @@ func TestServer_Addr(t *testing.T) {
 }
 
 func TestServer_ListenAndServe(t *testing.T) {
-	handler := respkit.NewMux()
-	handler.HandleFunc("ping", func(ctx *respkit.Context) error {
-		return ctx.Conn.WriteString("PONG")
-	})
-
 	server := respkit.NewServer(&respkit.Config{
 		Addr:    "127.0.0.1:0",
 		Network: "tcp",
-	}, handler)
+	})
 
 	errCh := startServerAsync(server, server.ListenAndServe)
 
@@ -212,16 +207,11 @@ func TestServer_ListenAndServe(t *testing.T) {
 	waitForServerExit(t, errCh, "ListenAndServe() did not return after Shutdown")
 }
 
-func TestServer_HandlerPingPong(t *testing.T) {
-	handler := respkit.NewMux()
-	handler.HandleFunc("ping", func(ctx *respkit.Context) error {
-		return ctx.Conn.WriteString("PONG")
-	})
-
+func TestServer_DefaultPingPong(t *testing.T) {
 	server := respkit.NewServer(&respkit.Config{
 		Addr:    "127.0.0.1:0",
 		Network: "tcp",
-	}, handler)
+	})
 
 	errCh := startServerAsync(server, server.Start)
 

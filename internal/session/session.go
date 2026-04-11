@@ -137,6 +137,16 @@ func (s *Session) SetRequestSubmitter(fn func(protocol.RespValue, *mempool.Scope
 	s.submitRequest = fn
 }
 
+// SetMaxInFlight configures the maximum concurrent in-flight requests.
+func (s *Session) SetMaxInFlight(n int32) {
+	if n <= 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.maxInFlight = n
+}
+
 // UseDispatcher binds the session request submit path to a dispatcher instance.
 func (s *Session) UseDispatcher(d *dispatcher.Dispatcher) {
 	if d == nil {
