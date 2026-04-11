@@ -46,15 +46,15 @@ type Command struct {
 // ScopedRequest carries a scope-managed request value for a session.
 type ScopedRequest struct {
 	Session *session.Session
-	Value   protocol.RespValue
+	Request protocol.RespValue
 	Scope   *mempool.Scope
 }
 
 // ScopedResponse carries a scope-managed response value for a session.
 type ScopedResponse struct {
-	Session *session.Session
-	Value   protocol.RespValue
-	Scope   *mempool.Scope
+	Session  *session.Session
+	Response protocol.RespValue
+	Scope    *mempool.Scope
 }
 
 // Context provides context for command handling.
