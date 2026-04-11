@@ -47,6 +47,14 @@ func (c *Conn) Read(scope *mempool.Scope) (protocol.RespValue, error) {
 	return c.reader.Read(c.netConn, scope)
 }
 
+// RawRead preserves the legacy server path while the new runtime is not yet wired in.
+func (c *Conn) RawRead(buf []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.netConn.Read(buf)
+}
+
 // Write buffers a RESP value for a later flush.
 func (c *Conn) Write(value protocol.RespValue) error {
 	c.mu.Lock()
@@ -61,6 +69,11 @@ func (c *Conn) Flush() error {
 	defer c.mu.Unlock()
 
 	return c.writer.Flush(c.netConn)
+}
+
+// NetConn exposes the wrapped connection for legacy call sites during the transition.
+func (c *Conn) NetConn() net.Conn {
+	return c.netConn
 }
 
 // Close closes the underlying connection.

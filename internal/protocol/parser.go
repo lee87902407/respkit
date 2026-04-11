@@ -42,7 +42,7 @@ func (r *Reader) Read(src io.Reader, scope *mempool.Scope) (RespValue, error) {
 			return value, nil
 		}
 
-		chunk := scope.Get(defaultReadBufferSize)
+		chunk := scope.GetHeapBuffer(defaultReadBufferSize)
 		n, err := src.Read(chunk)
 		if n > 0 {
 			r.buf = append(r.buf, chunk[:n]...)
@@ -68,7 +68,7 @@ func copyValueIntoScope(scope *mempool.Scope, value RespValue) RespValue {
 		if value.Bulk == nil {
 			return value
 		}
-		dup := scope.Get(len(value.Bulk))
+		dup := scope.GetHeapBuffer(len(value.Bulk))
 		copy(dup, value.Bulk)
 		value.Bulk = dup[:len(value.Bulk)]
 		return value
