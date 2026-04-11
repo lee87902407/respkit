@@ -2,6 +2,8 @@ package session
 
 import (
 	"io"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -259,7 +261,7 @@ func TestSessionWriteLoopFlushesBatchAndReleasesScopes(t *testing.T) {
 	select {
 	case <-time.After(time.Second):
 		t.Fatal("writeLoop did not drain queued responses in time")
-	case <-waitForCondition(func() bool { return writer.flushes == 1 && scope1.closed && scope2.closed }):
+	case <-waitForCondition(func() bool { return writer.FlushCount() == 1 && scope1.IsClosed() && scope2.IsClosed() }):
 	}
 
 	sess.StopGracefully()
@@ -269,13 +271,13 @@ func TestSessionWriteLoopFlushesBatchAndReleasesScopes(t *testing.T) {
 		t.Fatal("writeLoop did not exit after graceful stop")
 	}
 
-	if len(writer.values) != 2 {
-		t.Fatalf("write count = %d, want 2", len(writer.values))
+	if writer.WriteCount() != 2 {
+		t.Fatalf("write count = %d, want 2", writer.WriteCount())
 	}
-	if writer.flushes != 1 {
-		t.Fatalf("flush count = %d, want 1", writer.flushes)
+	if writer.FlushCount() != 1 {
+		t.Fatalf("flush count = %d, want 1", writer.FlushCount())
 	}
-	if !scope1.closed || !scope2.closed {
+	if !scope1.IsClosed() || !scope2.IsClosed() {
 		t.Fatal("scopes should be released after flush")
 	}
 }
@@ -520,26 +522,47 @@ func (m *mockCloser) Close() error {
 }
 
 type mockScope struct {
-	closed bool
+	closed atomic.Bool
 }
 
 func (m *mockScope) Close() {
-	m.closed = true
+	m.closed.Store(true)
+}
+
+func (m *mockScope) IsClosed() bool {
+	return m.closed.Load()
 }
 
 type mockResponseWriter struct {
+	mu      sync.Mutex
 	values  []protocol.RespValue
 	flushes int
 }
 
 func (m *mockResponseWriter) Write(value protocol.RespValue) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.values = append(m.values, value)
 	return nil
 }
 
 func (m *mockResponseWriter) Flush() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.flushes++
 	return nil
+}
+
+func (m *mockResponseWriter) WriteCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.values)
+}
+
+func (m *mockResponseWriter) FlushCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.flushes
 }
 
 func waitForCondition(cond func() bool) <-chan struct{} {

@@ -1,16 +1,15 @@
 # respkit
 
-`respkit` 是一个面向 Redis 协议兼容服务端场景的高性能 Go 库，提供零拷贝 RESP 解析、缓冲写出、连接复用、会话管理、命令路由以及 Pub/Sub 能力。
+`respkit` 是一个面向 Redis 协议兼容服务端场景的 Go 库。当前默认运行时已经切到 **Session + Dispatcher** 主路径：连接建立后，`Session` 负责读写循环、请求限流和响应排队，内置命令通过 dispatcher 执行并回写 RESP 响应。
 
-## 功能特性
+## 当前状态
 
-- 零拷贝 RESP 解析，尽量减少分配与复制
-- 缓冲写出，降低系统调用次数
-- 连接池与缓冲区复用，减轻 GC 压力
-- 会话管理，便于维护每个连接的状态
-- 大小写不敏感的命令路由与兜底处理
-- 支持频道订阅与模式订阅
-- 支持优雅关闭，便于服务平滑退出
+- 默认服务入口：`respkit.NewServer(config)`
+- 默认命令路径：`PING`、`ECHO`
+- 默认运行时：`Session.readLoop` + `Session.writeLoop` + `Dispatcher`
+- 仍保留的兼容层：`Conn` / `DetachedConn` 写接口，供 `PubSub` 使用
+
+> 目前 **legacy mux/handler server 主路径已经删除**。如果你之前基于 `NewMux()` / `HandleFunc()` 使用 `respkit`，请改用默认服务端运行时或后续 typed command 扩展路径。
 
 ## 安装
 
@@ -24,32 +23,21 @@ go get github.com/lee87902407/respkit
 package main
 
 import (
-    "log"
+	"log"
 
-    "github.com/lee87902407/respkit"
+	"github.com/lee87902407/respkit"
 )
 
 func main() {
-    mux := respkit.NewMux()
+	server := respkit.NewServer(&respkit.Config{
+		Addr: ":6380",
+	})
 
-    mux.HandleFunc("ping", func(ctx *respkit.Context) error {
-        return ctx.Conn.WriteString("PONG")
-    })
-
-    mux.HandleFunc("set", func(ctx *respkit.Context) error {
-        return ctx.Conn.WriteString("OK")
-    })
-
-    server := respkit.NewServer(
-        &respkit.Config{Addr: ":6380"},
-        mux,
-    )
-
-    log.Fatal(server.ListenAndServe())
+	log.Fatal(server.ListenAndServe())
 }
 ```
 
-## 使用 `redis-cli` 验证
+启动后可以直接验证内置命令：
 
 ```bash
 # 启动示例服务
@@ -57,72 +45,69 @@ go run example/basic-server.go
 
 # 另开一个终端执行
 redis-cli -p 6380 PING
-redis-cli -p 6380 SET mykey myvalue
-redis-cli -p 6380 GET mykey
+redis-cli -p 6380 ECHO hello
 ```
 
-## API 概览
-
-### 服务生命周期
+## 服务生命周期
 
 ```go
 server := respkit.NewServer(&respkit.Config{
-    Addr:           ":6379",
-    Network:        "tcp",
-    IdleTimeout:    30 * time.Second,
-    MaxConnections: 1000,
-}, handler)
+	Addr:                  ":6379",
+	Network:               "tcp",
+	IdleTimeout:           30 * time.Second,
+	DispatcherWorkers:     1,
+	QueueSize:             4096,
+	MaxInFlightPerSession: 1,
+})
 
 err := server.ListenAndServe()
 err = server.Shutdown()
 ```
 
-### 命令处理器
+## Config 重点字段
 
 ```go
-type Handler interface {
-    Handle(ctx *Context) error
-}
-
-type Context struct {
-    Conn    Conn
-    Command Command
-    Session *session.Session
+type Config struct {
+	Addr                  string
+	Network               string
+	ReadBufferSize        int
+	WriteBufferSize       int
+	DispatcherWorkers     int
+	QueueSize             int
+	MaxInFlightPerSession int
+	IdleTimeout           time.Duration
+	MemPool               mempool.BytePool
+	Logger                *zap.Logger
+	SessionAllocator      SessionAllocator
 }
 ```
 
-### 连接接口
+这些字段里最关键的是：
 
-```go
-type Conn interface {
-    Session() *session.Session
-    SetData(interface{})
+- `DispatcherWorkers`：dispatcher worker 数
+- `QueueSize`：调度队列长度
+- `MaxInFlightPerSession`：每连接最大并发请求数
+- `IdleTimeout`：连接空闲读超时
 
-    WriteString(s string) error
-    WriteBulk(b []byte) error
-    WriteInt(n int64) error
-    WriteArray(n int) error
-    WriteNull() error
-    WriteError(msg string) error
-    WriteAny(v interface{}) error
+## PubSub 说明
 
-    Close() error
-    RemoteAddr() net.Addr
-    Detach() DetachedConn
-}
+`PubSub` 仍然可用，但它目前依赖 `Conn` 的写接口兼容层。也就是说：
+
+- server 默认请求处理已经走新 runtime
+- PubSub 仍通过 `WriteArray / WriteBulk / Flush` 这类接口推送消息
+
+这部分兼容层会在后续阶段继续收敛。
+
+## 测试
+
+```bash
+go test ./...
+go test -race ./...
 ```
 
 ## 性能说明
 
-`respkit` 通过零拷贝解析与缓冲写出减少分配与系统调用，在高并发、小包场景下具备较好的吞吐表现。
-
-```text
-$ redis-benchmark -h 127.0.0.1 -p 6380 -t set,get -n 100000 -c 50
-SET: 85000 requests/sec
-GET: 92000 requests/sec
-```
-
-更详细的数据见 `BENCHMARK_REPORT.md`。
+`respkit` 仍然保留零拷贝 RESP 解析、缓冲写出和会话级统计能力。更详细的 benchmark 结果见 `BENCHMARK_REPORT.md`。
 
 ## 许可证
 
