@@ -19,6 +19,18 @@ func TestNewSessionInitializesFields(t *testing.T) {
 	if !sess.LastSeenAt().Equal(sess.CreatedAt) {
 		t.Fatalf("LastSeen = %v, want %v", sess.LastSeenAt(), sess.CreatedAt)
 	}
+	if sess.responses == nil {
+		t.Fatal("responses channel should be initialized")
+	}
+	if cap(sess.responses) == 0 {
+		t.Fatal("responses channel should be buffered")
+	}
+	if sess.maxInFlight != 1 {
+		t.Fatalf("maxInFlight = %d, want 1", sess.maxInFlight)
+	}
+	if sess.stopCh == nil {
+		t.Fatal("stopCh should be initialized")
+	}
 }
 
 func TestSessionCountersAndLastSeen(t *testing.T) {
@@ -145,6 +157,49 @@ func TestSessionOnRemove(t *testing.T) {
 		// onRemove was called
 	case <-time.After(time.Second):
 		t.Fatal("onRemove was not called")
+	}
+}
+
+func TestSessionStopGracefullyUsesStopChannel(t *testing.T) {
+	sess := NewSession(1)
+	running := make(chan struct{})
+	exited := make(chan struct{})
+
+	sess.Start(func() {
+		close(running)
+		<-sess.stopCh
+		close(exited)
+	})
+
+	<-running
+	sess.StopGracefully()
+
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		t.Fatal("StopGracefully() did not close stopCh")
+	}
+}
+
+func TestSessionCloseNowClosesCloser(t *testing.T) {
+	sess := NewSession(1)
+	closer := &mockCloser{}
+	sess.SetCloser(closer)
+
+	sess.Start(func() {
+		for {
+			if sess.ShouldStop() {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	})
+
+	if err := sess.CloseNow(); err != nil {
+		t.Fatalf("CloseNow() error = %v", err)
+	}
+	if !closer.closed {
+		t.Fatal("CloseNow() did not close the closer")
 	}
 }
 

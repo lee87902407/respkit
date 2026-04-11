@@ -5,7 +5,16 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/lee87902407/respkit/internal/protocol"
 )
+
+const defaultResponseQueueSize = 16
+
+type queuedResponse struct {
+	value protocol.RespValue
+	scope any
+}
 
 // Session holds per-connection state and is the primary lifecycle object.
 type Session struct {
@@ -15,14 +24,21 @@ type Session struct {
 	CreatedAt time.Time
 
 	// Lifecycle management.
-	done     chan struct{}   // closed when handle goroutine exits
+	done     chan struct{}  // closed when handle goroutine exits
+	stopCh   chan struct{}  // closed when graceful shutdown starts
 	stopFlag atomic.Bool    // set by Stop for graceful shutdown
 	closer   io.Closer      // underlying connection for forced close
 	onRemove func(*Session) // called when handle goroutine exits
 	closed   bool
+	stopOnce sync.Once
 
 	// User data.
 	data interface{}
+
+	// Runtime skeleton for the redesign path.
+	responses   chan queuedResponse
+	maxInFlight int32
+	inflight    atomic.Int32
 
 	// Statistics.
 	lastSeen   time.Time
@@ -43,10 +59,13 @@ type Session struct {
 func NewSession(id uint64) *Session {
 	now := time.Now()
 	return &Session{
-		ID:        id,
-		CreatedAt: now,
-		lastSeen:  now,
-		done:      make(chan struct{}),
+		ID:          id,
+		CreatedAt:   now,
+		lastSeen:    now,
+		done:        make(chan struct{}),
+		stopCh:      make(chan struct{}),
+		responses:   make(chan queuedResponse, defaultResponseQueueSize),
+		maxInFlight: 1,
 	}
 }
 
@@ -62,6 +81,11 @@ func (s *Session) SetOnRemove(fn func(*Session)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onRemove = fn
+}
+
+// SetOnClose sets the callback invoked when session processing exits.
+func (s *Session) SetOnClose(fn func(*Session)) {
+	s.SetOnRemove(fn)
 }
 
 // Start runs the given handle function in a goroutine.
@@ -82,13 +106,27 @@ func (s *Session) Start(handle func()) {
 // Stop performs a graceful stop by signaling the handle loop to exit.
 // It blocks until the handle goroutine has finished.
 func (s *Session) Stop() {
-	s.stopFlag.Store(true)
+	s.StopGracefully()
 	<-s.done
+}
+
+// StopGracefully signals the session to stop without forcing the connection closed.
+func (s *Session) StopGracefully() {
+	s.stopFlag.Store(true)
+	s.stopOnce.Do(func() {
+		close(s.stopCh)
+	})
 }
 
 // Close performs a forced close by closing the underlying connection.
 // It blocks until the handle goroutine has finished.
 func (s *Session) Close() error {
+	return s.CloseNow()
+}
+
+// CloseNow forcefully closes the underlying connection and waits for exit.
+func (s *Session) CloseNow() error {
+	s.StopGracefully()
 	s.mu.Lock()
 	if !s.closed {
 		s.closed = true
