@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -10,6 +11,9 @@ import (
 )
 
 const defaultResponseQueueSize = 16
+
+// ErrSessionStopped reports attempts to queue work after graceful shutdown starts.
+var ErrSessionStopped = errors.New("session stopped")
 
 type queuedResponse struct {
 	value protocol.RespValue
@@ -138,6 +142,21 @@ func (s *Session) CloseNow() error {
 	s.mu.Unlock()
 	<-s.done
 	return nil
+}
+
+// HandleResponse enqueues a response for a future write loop.
+func (s *Session) HandleResponse(value protocol.RespValue, scope any) error {
+	if s.ShouldStop() {
+		return ErrSessionStopped
+	}
+
+	queued := queuedResponse{value: value, scope: scope}
+	select {
+	case s.responses <- queued:
+		return nil
+	case <-s.stopCh:
+		return ErrSessionStopped
+	}
 }
 
 // ShouldStop returns true if the handle loop should exit.

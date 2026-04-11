@@ -3,6 +3,8 @@ package session
 import (
 	"testing"
 	"time"
+
+	"github.com/lee87902407/respkit/internal/protocol"
 )
 
 func TestNewSessionInitializesFields(t *testing.T) {
@@ -200,6 +202,34 @@ func TestSessionCloseNowClosesCloser(t *testing.T) {
 	}
 	if !closer.closed {
 		t.Fatal("CloseNow() did not close the closer")
+	}
+}
+
+func TestSessionHandleResponseQueuesValue(t *testing.T) {
+	sess := NewSession(1)
+	want := protocol.SimpleString("PONG")
+
+	if err := sess.HandleResponse(want, nil); err != nil {
+		t.Fatalf("HandleResponse() error = %v", err)
+	}
+
+	select {
+	case got := <-sess.responses:
+		if !got.value.Equal(want) {
+			t.Fatalf("queued response = %#v, want %#v", got.value, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("HandleResponse() did not enqueue response")
+	}
+}
+
+func TestSessionHandleResponseRejectsStoppedSession(t *testing.T) {
+	sess := NewSession(1)
+	sess.StopGracefully()
+
+	err := sess.HandleResponse(protocol.SimpleString("PONG"), nil)
+	if err != ErrSessionStopped {
+		t.Fatalf("HandleResponse() error = %v, want %v", err, ErrSessionStopped)
 	}
 }
 
