@@ -3,11 +3,18 @@ package respkit
 import (
 	"path"
 	"sync"
+
+	"github.com/lee87902407/respkit/internal/protocol"
 )
 
+type pubSubWriter interface {
+	WriteValue(protocol.RespValue) error
+	Flush() error
+}
+
 type pubSubClient struct {
-	conn Conn
-	mu   sync.Mutex
+	writer pubSubWriter
+	mu     sync.Mutex
 }
 
 type pubSubEntry struct {
@@ -35,7 +42,7 @@ func (ps *PubSub) ensureClient(conn Conn) *pubSubClient {
 	if client, ok := ps.clients[conn]; ok {
 		return client
 	}
-	client := &pubSubClient{conn: conn}
+	client := &pubSubClient{writer: &legacyPubSubWriter{conn: conn}}
 	ps.clients[conn] = client
 	ps.entries[conn] = make(map[pubSubEntry]struct{})
 	return client
@@ -52,19 +59,10 @@ func (ps *PubSub) Subscribe(conn Conn, channel string) error {
 
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	if err := client.conn.WriteArray(3); err != nil {
+	if err := client.writer.WriteValue(buildSubscribeAckValue("subscribe", channel, count)); err != nil {
 		return err
 	}
-	if err := client.conn.WriteBulk([]byte("subscribe")); err != nil {
-		return err
-	}
-	if err := client.conn.WriteBulk([]byte(channel)); err != nil {
-		return err
-	}
-	if err := client.conn.WriteInt(int64(count)); err != nil {
-		return err
-	}
-	return client.conn.Flush()
+	return client.writer.Flush()
 }
 
 // PSubscribe subscribes a connection to a glob pattern.
@@ -78,19 +76,10 @@ func (ps *PubSub) PSubscribe(conn Conn, pattern string) error {
 
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	if err := client.conn.WriteArray(3); err != nil {
+	if err := client.writer.WriteValue(buildSubscribeAckValue("psubscribe", pattern, count)); err != nil {
 		return err
 	}
-	if err := client.conn.WriteBulk([]byte("psubscribe")); err != nil {
-		return err
-	}
-	if err := client.conn.WriteBulk([]byte(pattern)); err != nil {
-		return err
-	}
-	if err := client.conn.WriteInt(int64(count)); err != nil {
-		return err
-	}
-	return client.conn.Flush()
+	return client.writer.Flush()
 }
 
 // Unsubscribe unsubscribes a connection from a channel.
@@ -128,19 +117,10 @@ func (ps *PubSub) unsubscribe(conn Conn, pattern bool, value string) error {
 	}
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	if err := client.conn.WriteArray(3); err != nil {
+	if err := client.writer.WriteValue(buildSubscribeAckValue(name, value, count)); err != nil {
 		return err
 	}
-	if err := client.conn.WriteBulk([]byte(name)); err != nil {
-		return err
-	}
-	if err := client.conn.WriteBulk([]byte(value)); err != nil {
-		return err
-	}
-	if err := client.conn.WriteInt(int64(count)); err != nil {
-		return err
-	}
-	return client.conn.Flush()
+	return client.writer.Flush()
 }
 
 // Publish broadcasts a message to all matching subscribers.
@@ -166,45 +146,17 @@ func (ps *PubSub) Publish(channel, message string) (int, error) {
 	for _, entry := range matches {
 		entry.client.mu.Lock()
 		if entry.pattern {
-			if err := entry.client.conn.WriteArray(4); err != nil {
-				entry.client.mu.Unlock()
-				return sent, err
-			}
-			if err := entry.client.conn.WriteBulk([]byte("pmessage")); err != nil {
-				entry.client.mu.Unlock()
-				return sent, err
-			}
-			if err := entry.client.conn.WriteBulk([]byte(entry.value)); err != nil {
-				entry.client.mu.Unlock()
-				return sent, err
-			}
-			if err := entry.client.conn.WriteBulk([]byte(channel)); err != nil {
-				entry.client.mu.Unlock()
-				return sent, err
-			}
-			if err := entry.client.conn.WriteBulk([]byte(message)); err != nil {
+			if err := entry.client.writer.WriteValue(buildPatternMessageValue(entry.value, channel, message)); err != nil {
 				entry.client.mu.Unlock()
 				return sent, err
 			}
 		} else {
-			if err := entry.client.conn.WriteArray(3); err != nil {
-				entry.client.mu.Unlock()
-				return sent, err
-			}
-			if err := entry.client.conn.WriteBulk([]byte("message")); err != nil {
-				entry.client.mu.Unlock()
-				return sent, err
-			}
-			if err := entry.client.conn.WriteBulk([]byte(channel)); err != nil {
-				entry.client.mu.Unlock()
-				return sent, err
-			}
-			if err := entry.client.conn.WriteBulk([]byte(message)); err != nil {
+			if err := entry.client.writer.WriteValue(buildPublishMessageValue(channel, message)); err != nil {
 				entry.client.mu.Unlock()
 				return sent, err
 			}
 		}
-		if err := entry.client.conn.Flush(); err != nil {
+		if err := entry.client.writer.Flush(); err != nil {
 			entry.client.mu.Unlock()
 			return sent, err
 		}
@@ -212,4 +164,71 @@ func (ps *PubSub) Publish(channel, message string) (int, error) {
 		sent++
 	}
 	return sent, nil
+}
+
+func buildSubscribeAckValue(kind, value string, count int) protocol.RespValue {
+	return protocol.ArrayOf(
+		protocol.BulkFromString(kind),
+		protocol.BulkFromString(value),
+		protocol.Integer(int64(count)),
+	)
+}
+
+func buildPublishMessageValue(channel, message string) protocol.RespValue {
+	return protocol.ArrayOf(
+		protocol.BulkFromString("message"),
+		protocol.BulkFromString(channel),
+		protocol.BulkFromString(message),
+	)
+}
+
+func buildPatternMessageValue(pattern, channel, message string) protocol.RespValue {
+	return protocol.ArrayOf(
+		protocol.BulkFromString("pmessage"),
+		protocol.BulkFromString(pattern),
+		protocol.BulkFromString(channel),
+		protocol.BulkFromString(message),
+	)
+}
+
+type legacyPubSubWriter struct {
+	conn Conn
+}
+
+func (w *legacyPubSubWriter) WriteValue(value protocol.RespValue) error {
+	return writeLegacyValue(w.conn, value)
+}
+
+func (w *legacyPubSubWriter) Flush() error {
+	return w.conn.Flush()
+}
+
+func writeLegacyValue(conn Conn, value protocol.RespValue) error {
+	switch value.Type {
+	case protocol.TypeArray:
+		if err := conn.WriteArray(len(value.Array)); err != nil {
+			return err
+		}
+		for _, elem := range value.Array {
+			if err := writeLegacyValue(conn, elem); err != nil {
+				return err
+			}
+		}
+		return nil
+	case protocol.TypeBulkString:
+		if value.Bulk == nil {
+			return conn.WriteNull()
+		}
+		return conn.WriteBulk(value.Bulk)
+	case protocol.TypeInteger:
+		return conn.WriteInt(value.Int)
+	case protocol.TypeSimpleString:
+		return conn.WriteString(value.Str)
+	case protocol.TypeError:
+		return conn.WriteError(value.Str)
+	case protocol.TypeNull:
+		return conn.WriteNull()
+	default:
+		return conn.WriteAny(value)
+	}
 }

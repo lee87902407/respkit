@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/lee87902407/respkit/internal/protocol"
 	"github.com/lee87902407/respkit/internal/session"
 )
 
@@ -152,5 +153,42 @@ func TestPubSubPatternSubscribeAndPublish(t *testing.T) {
 	}
 	if got := client.buf.String(); got != "*3\r\n$12\r\npunsubscribe\r\n$6\r\njobs:*\r\n:0\r\n" {
 		t.Fatalf("PUnsubscribe() payload = %q", got)
+	}
+}
+
+func TestBuildSubscribeAckValue(t *testing.T) {
+	got := buildSubscribeAckValue("subscribe", "jobs", 1)
+	want := protocol.ArrayOf(
+		protocol.BulkFromString("subscribe"),
+		protocol.BulkFromString("jobs"),
+		protocol.Integer(1),
+	)
+	if !got.Equal(want) {
+		t.Fatalf("buildSubscribeAckValue() = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildPublishMessageValue(t *testing.T) {
+	got := buildPublishMessageValue("jobs", "ready")
+	want := protocol.ArrayOf(
+		protocol.BulkFromString("message"),
+		protocol.BulkFromString("jobs"),
+		protocol.BulkFromString("ready"),
+	)
+	if !got.Equal(want) {
+		t.Fatalf("buildPublishMessageValue() = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildPatternMessageValue(t *testing.T) {
+	got := buildPatternMessageValue("jobs:*", "jobs:1", "ready")
+	want := protocol.ArrayOf(
+		protocol.BulkFromString("pmessage"),
+		protocol.BulkFromString("jobs:*"),
+		protocol.BulkFromString("jobs:1"),
+		protocol.BulkFromString("ready"),
+	)
+	if !got.Equal(want) {
+		t.Fatalf("buildPatternMessageValue() = %#v, want %#v", got, want)
 	}
 }
