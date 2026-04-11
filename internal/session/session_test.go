@@ -1,9 +1,11 @@
 package session
 
 import (
+	"io"
 	"testing"
 	"time"
 
+	"github.com/lee87902407/basekit/mempool"
 	"github.com/lee87902407/respkit/internal/protocol"
 )
 
@@ -273,6 +275,134 @@ func TestSessionWriteLoopFlushesBatchAndReleasesScopes(t *testing.T) {
 	}
 	if !scope1.closed || !scope2.closed {
 		t.Fatal("scopes should be released after flush")
+	}
+}
+
+func TestSessionReadLoopSubmitsRequestWithScope(t *testing.T) {
+	sess := NewSession(1)
+	pool := mempool.New(mempool.DefaultOptions())
+	sess.SetScopeFactory(func() *mempool.Scope { return mempool.NewScope(pool) })
+
+	reads := 0
+	sess.SetRequestReader(func(scope *mempool.Scope) (protocol.RespValue, error) {
+		reads++
+		if scope == nil {
+			t.Fatal("readLoop passed nil scope to reader")
+		}
+		if reads == 1 {
+			return protocol.ArrayOf(protocol.BulkFromString("PING")), nil
+		}
+		return protocol.RespValue{}, io.EOF
+	})
+
+	submitted := make(chan protocol.RespValue, 1)
+	sess.SetRequestSubmitter(func(value protocol.RespValue, scope *mempool.Scope) error {
+		if scope == nil {
+			t.Fatal("submitter received nil scope")
+		}
+		submitted <- value
+		sess.inflight.Add(-1)
+		return nil
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sess.readLoop()
+	}()
+
+	select {
+	case got := <-submitted:
+		want := protocol.ArrayOf(protocol.BulkFromString("PING"))
+		if !got.Equal(want) {
+			t.Fatalf("submitted request = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("readLoop did not submit request")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("readLoop did not exit after reader EOF")
+	}
+}
+
+func TestSessionReadLoopHonorsInflightLimit(t *testing.T) {
+	sess := NewSession(1)
+	pool := mempool.New(mempool.DefaultOptions())
+	sess.SetScopeFactory(func() *mempool.Scope { return mempool.NewScope(pool) })
+	sess.maxInFlight = 1
+
+	secondReadAttempted := make(chan struct{}, 1)
+	readCount := 0
+	value1 := protocol.ArrayOf(protocol.BulkFromString("PING"))
+	value2 := protocol.ArrayOf(protocol.BulkFromString("ECHO"), protocol.BulkFromString("hi"))
+
+	sess.SetRequestReader(func(scope *mempool.Scope) (protocol.RespValue, error) {
+		readCount++
+		switch readCount {
+		case 1:
+			return value1, nil
+		case 2:
+			secondReadAttempted <- struct{}{}
+			return value2, nil
+		default:
+			return protocol.RespValue{}, io.EOF
+		}
+	})
+
+	firstSubmitted := make(chan struct{}, 1)
+	secondSubmitted := make(chan protocol.RespValue, 1)
+	allowSecond := make(chan struct{})
+	submitCount := 0
+	sess.SetRequestSubmitter(func(value protocol.RespValue, scope *mempool.Scope) error {
+		submitCount++
+		switch submitCount {
+		case 1:
+			firstSubmitted <- struct{}{}
+			<-allowSecond
+			sess.inflight.Add(-1)
+		case 2:
+			secondSubmitted <- value
+			sess.inflight.Add(-1)
+		}
+		return nil
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sess.readLoop()
+	}()
+
+	select {
+	case <-firstSubmitted:
+	case <-time.After(time.Second):
+		t.Fatal("first request was not submitted")
+	}
+
+	select {
+	case <-secondReadAttempted:
+		t.Fatal("second read should not happen while inflight is full")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(allowSecond)
+
+	select {
+	case got := <-secondSubmitted:
+		if !got.Equal(value2) {
+			t.Fatalf("second submitted request = %#v, want %#v", got, value2)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second request was not submitted after inflight released")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("readLoop did not exit after processing queued reads")
 	}
 }
 

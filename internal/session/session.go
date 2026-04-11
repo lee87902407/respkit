@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lee87902407/basekit/mempool"
 	"github.com/lee87902407/respkit/internal/protocol"
 )
 
@@ -24,6 +25,10 @@ type responseWriter interface {
 	Write(protocol.RespValue) error
 	Flush() error
 }
+
+type requestReader func(*mempool.Scope) (protocol.RespValue, error)
+type requestSubmitter func(protocol.RespValue, *mempool.Scope) error
+type scopeFactory func() *mempool.Scope
 
 // Session holds per-connection state and is the primary lifecycle object.
 type Session struct {
@@ -45,9 +50,12 @@ type Session struct {
 	data interface{}
 
 	// Runtime skeleton for the redesign path.
-	responses   chan queuedResponse
-	maxInFlight int32
-	inflight    atomic.Int32
+	responses     chan queuedResponse
+	maxInFlight   int32
+	inflight      atomic.Int32
+	newScope      scopeFactory
+	readRequest   requestReader
+	submitRequest requestSubmitter
 
 	// Statistics.
 	lastSeen   time.Time
@@ -67,6 +75,7 @@ type Session struct {
 // NewSession creates a new session with the given ID.
 func NewSession(id uint64) *Session {
 	now := time.Now()
+	pool := mempool.New(mempool.DefaultOptions())
 	return &Session{
 		ID:          id,
 		CreatedAt:   now,
@@ -75,6 +84,9 @@ func NewSession(id uint64) *Session {
 		stopCh:      make(chan struct{}),
 		responses:   make(chan queuedResponse, defaultResponseQueueSize),
 		maxInFlight: 1,
+		newScope: func() *mempool.Scope {
+			return mempool.NewScope(pool)
+		},
 	}
 }
 
@@ -95,6 +107,27 @@ func (s *Session) SetOnRemove(fn func(*Session)) {
 // SetOnClose sets the callback invoked when session processing exits.
 func (s *Session) SetOnClose(fn func(*Session)) {
 	s.SetOnRemove(fn)
+}
+
+// SetScopeFactory overrides how the session allocates per-request scopes.
+func (s *Session) SetScopeFactory(fn func() *mempool.Scope) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.newScope = fn
+}
+
+// SetRequestReader overrides how the session reads requests.
+func (s *Session) SetRequestReader(fn func(*mempool.Scope) (protocol.RespValue, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.readRequest = fn
+}
+
+// SetRequestSubmitter overrides how the session submits requests for execution.
+func (s *Session) SetRequestSubmitter(fn func(protocol.RespValue, *mempool.Scope) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.submitRequest = fn
 }
 
 // Start runs the given handle function in a goroutine.
@@ -212,6 +245,46 @@ func (s *Session) writeLoop(writer responseWriter) {
 	}
 }
 
+func (s *Session) readLoop() {
+	reader, submitter, scopeFactory := s.getReadDependencies()
+	if reader == nil || submitter == nil || scopeFactory == nil {
+		return
+	}
+
+	for {
+		if s.ShouldStop() {
+			return
+		}
+		if !s.waitForInflightSlot() {
+			return
+		}
+
+		scope := scopeFactory()
+		if scope == nil {
+			return
+		}
+
+		value, err := reader(scope)
+		if err != nil {
+			releaseScope(scope)
+			if errors.Is(err, io.EOF) || errors.Is(err, netErrClosed) || s.ShouldStop() {
+				return
+			}
+			return
+		}
+
+		s.inflight.Add(1)
+		if err := submitter(value, scope); err != nil {
+			s.inflight.Add(-1)
+			releaseScope(scope)
+			if s.ShouldStop() {
+				return
+			}
+			return
+		}
+	}
+}
+
 func (s *Session) releaseBatch(batch []queuedResponse) {
 	for _, resp := range batch {
 		releaseScope(resp.scope)
@@ -226,6 +299,30 @@ func releaseScope(scope any) {
 		_ = v.Close()
 	}
 }
+
+func (s *Session) waitForInflightSlot() bool {
+	for {
+		if s.ShouldStop() {
+			return false
+		}
+		if s.inflight.Load() < s.maxInFlight {
+			return true
+		}
+		select {
+		case <-s.stopCh:
+			return false
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func (s *Session) getReadDependencies() (requestReader, requestSubmitter, scopeFactory) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.readRequest, s.submitRequest, s.newScope
+}
+
+var netErrClosed = errors.New("use of closed network connection")
 
 // ShouldStop returns true if the handle loop should exit.
 func (s *Session) ShouldStop() bool {
