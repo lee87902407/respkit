@@ -10,7 +10,10 @@ import (
 	"time"
 
 	blog "github.com/lee87902407/basekit/log"
+	"github.com/lee87902407/basekit/mempool"
+	icommand "github.com/lee87902407/respkit/internal/command"
 	iconn "github.com/lee87902407/respkit/internal/conn"
+	idispatcher "github.com/lee87902407/respkit/internal/dispatcher"
 	"github.com/lee87902407/respkit/internal/protocol"
 	"github.com/lee87902407/respkit/internal/resp"
 	"github.com/lee87902407/respkit/internal/session"
@@ -36,6 +39,7 @@ type Server struct {
 	handler          commandHandler
 	factory          commandFactory
 	sessionAllocator SessionAllocator
+	dispatcher       *idispatcher.Dispatcher
 
 	mu        sync.RWMutex
 	listener  net.Listener
@@ -146,6 +150,17 @@ func (s *Server) Start() error {
 	s.done.Store(false)
 	s.mu.Unlock()
 
+	if s.handler == nil && s.factory == nil {
+		registry := icommand.NewRegistry()
+		icommand.RegisterBuiltins(registry)
+		s.dispatcher = idispatcher.NewDispatcher(registry, s.config.DispatcherWorkers, s.config.QueueSize)
+		s.dispatcher.Start()
+		defer func() {
+			s.dispatcher.Stop()
+			s.dispatcher = nil
+		}()
+	}
+
 	err = s.serve(ln)
 
 	s.mu.Lock()
@@ -241,6 +256,13 @@ func (s *Server) serve(ln net.Listener) error {
 		}
 
 		conn := iconn.NewConn(netConn, nil, nil)
+		if s.handler == nil && s.factory == nil {
+			if !s.serveDefaultRuntime(conn) {
+				_ = conn.Close()
+			}
+			continue
+		}
+
 		sc := &serverConn{
 			conn:         conn,
 			writer:       resp.NewWriter(s.config.WriteBufferSize),
@@ -265,6 +287,48 @@ func (s *Server) serve(ln net.Listener) error {
 		s.sessions.Store(sess.ID, sess)
 		sess.Start(s.makeHandle(sc))
 	}
+}
+
+func (s *Server) serveDefaultRuntime(conn *iconn.Conn) bool {
+	allocator := s.sessionAllocator
+	if allocator == nil {
+		allocator = &DefaultSessionAllocator{}
+	}
+
+	placeholder := &serverConn{conn: conn, writer: resp.NewWriter(s.config.WriteBufferSize), writeBufSize: s.config.WriteBufferSize}
+	sess := allocator.Allocate(placeholder)
+	if sess == nil {
+		return false
+	}
+	placeholder.sess = sess
+
+	sess.SetCloser(conn)
+	sess.SetOnClose(func(ss *session.Session) {
+		s.sessions.Delete(ss.ID)
+		allocator.Release(ss)
+	})
+	if s.config.MemPool != nil {
+		sess.SetScopeFactory(func() *mempool.Scope {
+			return mempool.NewScope(s.config.MemPool)
+		})
+	}
+	sess.SetRequestReader(func(scope *mempool.Scope) (protocol.RespValue, error) {
+		if err := conn.SetReadDeadline(s.readDeadline()); err != nil {
+			return protocol.RespValue{}, err
+		}
+		value, err := conn.Read(scope)
+		if err == nil {
+			sess.UpdateLastSeen()
+			sess.IncrementCommands()
+			sess.AddBytesRead(uint64(len(protocol.SerializeValue(value))))
+		}
+		return value, err
+	})
+	sess.UseDispatcher(s.dispatcher)
+
+	s.sessions.Store(sess.ID, sess)
+	sess.StartLoops(&sessionConnWriter{conn: conn, sess: sess})
+	return true
 }
 
 func (s *Server) makeHandle(sc *serverConn) func() {
@@ -346,6 +410,31 @@ func (s *Server) readDeadline() time.Time {
 		return time.Now().Add(s.config.IdleTimeout)
 	}
 	return time.Now().Add(stopPollInterval)
+}
+
+type sessionConnWriter struct {
+	conn         *iconn.Conn
+	sess         *session.Session
+	pendingBytes int
+}
+
+func (w *sessionConnWriter) Write(value protocol.RespValue) error {
+	if err := w.conn.Write(value); err != nil {
+		return err
+	}
+	w.pendingBytes += len(protocol.SerializeValue(value))
+	return nil
+}
+
+func (w *sessionConnWriter) Flush() error {
+	if err := w.conn.Flush(); err != nil {
+		return err
+	}
+	if w.pendingBytes > 0 {
+		w.sess.AddBytesWritten(uint64(w.pendingBytes))
+		w.pendingBytes = 0
+	}
+	return nil
 }
 
 // serverConn adapts internal conn.Conn to the public Conn interface.

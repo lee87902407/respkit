@@ -2,6 +2,19 @@ package command
 
 import "github.com/lee87902407/respkit/internal/protocol"
 
+// RegisterBuiltins registers the built-in command set used by the new server path.
+func RegisterBuiltins(registry *Registry) {
+	if registry == nil {
+		return
+	}
+	registry.Register("ping", func(name string, args [][]byte) (Command, error) {
+		return buildPingCommand(args), nil
+	})
+	registry.Register("echo", func(name string, args [][]byte) (Command, error) {
+		return buildEchoCommand(args), nil
+	})
+}
+
 // PingCommand implements the RESP PING command.
 type PingCommand struct {
 	message    []byte

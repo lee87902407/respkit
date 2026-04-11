@@ -253,3 +253,48 @@ func TestServer_HandlerPingPong(t *testing.T) {
 
 	waitForServerExit(t, errCh, "Start() did not return after Stop")
 }
+
+func TestServer_DefaultSessionPathRegistersSessionAndRespondsToPing(t *testing.T) {
+	server := respkit.NewServer(&respkit.Config{
+		Addr:              "127.0.0.1:0",
+		Network:           "tcp",
+		DispatcherWorkers: 1,
+		QueueSize:         8,
+	})
+
+	errCh := startServerAsync(server, server.Start)
+	addr := waitForServerAddr(t, server, "server did not start in time")
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	deadline := time.Now().Add(testWaitTimeout)
+	for server.ActiveSessions() != 1 && time.Now().Before(deadline) {
+		time.Sleep(pollInterval)
+	}
+	if server.ActiveSessions() != 1 {
+		t.Fatalf("ActiveSessions() = %d, want 1", server.ActiveSessions())
+	}
+
+	if _, err := conn.Write([]byte("*1\r\n$4\r\nPING\r\n")); err != nil {
+		t.Fatalf("failed to write ping: %v", err)
+	}
+
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatalf("failed to read ping response: %v", err)
+	}
+	if line != "+PONG\r\n" {
+		t.Fatalf("response = %q, want %q", line, "+PONG\r\n")
+	}
+
+	if err := server.Stop(); err != nil {
+		t.Fatalf("Stop() failed = %v", err)
+	}
+
+	waitForServerExit(t, errCh, "Start() did not return after Stop")
+}

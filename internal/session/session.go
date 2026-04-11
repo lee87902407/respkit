@@ -27,6 +27,12 @@ type responseWriter interface {
 	Flush() error
 }
 
+// SessionWriter is the exported writer contract used by the server runtime.
+type SessionWriter interface {
+	Write(protocol.RespValue) error
+	Flush() error
+}
+
 type requestReader func(*mempool.Scope) (protocol.RespValue, error)
 type requestSubmitter func(protocol.RespValue, *mempool.Scope) error
 type scopeFactory func() *mempool.Scope
@@ -162,6 +168,35 @@ func (s *Session) UseDispatcher(d *dispatcher.Dispatcher) {
 
 		return nil
 	})
+}
+
+// StartLoops starts the session read/write runtime and closes Done only after both loops exit.
+func (s *Session) StartLoops(writer SessionWriter) {
+	go func() {
+		defer close(s.done)
+		defer func() {
+			if fn := s.getOnRemove(); fn != nil {
+				fn(s)
+			}
+		}()
+		defer s.closeConn()
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			s.writeLoop(writer)
+		}()
+
+		go func() {
+			defer wg.Done()
+			s.readLoop()
+			s.StopGracefully()
+		}()
+
+		wg.Wait()
+	}()
 }
 
 // Start runs the given handle function in a goroutine.
