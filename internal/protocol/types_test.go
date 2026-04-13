@@ -2,7 +2,10 @@ package protocol
 
 import (
 	"bytes"
+	"strings"
 	"testing"
+
+	"github.com/lee87902407/basekit/mempool"
 )
 
 func TestRespValueCommandName(t *testing.T) {
@@ -81,6 +84,23 @@ func TestRespValueAppendSerialized(t *testing.T) {
 	want := append(append([]byte(nil), prefix...), SerializeValue(value)...)
 	if !bytes.Equal(got, want) {
 		t.Fatalf("AppendSerialized() = %q, want %q", got, want)
+	}
+}
+
+func TestReaderReadUsesScopeBuffers(t *testing.T) {
+	reader := NewReader()
+	pool := mempool.New(mempool.DefaultOptions())
+	scope := mempool.NewScope(pool)
+	defer scope.Close()
+
+	value, err := reader.Read(strings.NewReader("*2\r\n$4\r\nECHO\r\n$5\r\nhello\r\n"), scope)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+
+	want := ArrayOf(BulkFromString("ECHO"), BulkFromString("hello"))
+	if !value.Equal(want) {
+		t.Fatalf("Read() = %#v, want %#v", value, want)
 	}
 }
 
